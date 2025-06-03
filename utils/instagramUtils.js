@@ -132,5 +132,6 @@ RESPONSE:`
 
 module.exports = {
     getAllInstagramPosts,
-    getPostComments
+    getPostComments,
+    replyToComment
 };
