@@ -60,4 +60,37 @@ const GetAllWorkflows = async (req, res) => {
   }
 };
 
-module.exports = { CreateWorkflowController, GetAllWorkflows };
+// Update automation status (active/inactive)
+const UpdateAutomationStatus = async (req, res) => {
+  try {
+    const { id, status } = req.body;
+    const { userId } = getAuth(req);
+    
+    // Validate inputs
+    if (!id || status === undefined) {
+      return res.status(400).json({ error: 'Automation ID and status are required' });
+    }
+    
+    // Update the status in the database
+    const result = await sql`
+      UPDATE automations
+      SET status = ${status}
+      WHERE id = ${id} AND user_id = ${userId}
+      RETURNING id, status`;
+      
+    if (result.length === 0) {
+      return res.status(404).json({ message: 'Automation not found or not owned by user' });
+    }
+    
+    console.log('Updated automation status:', result[0]);
+    return res.status(200).json({
+      message: 'Automation status updated successfully',
+      data: result[0],
+    });
+  } catch (err) {
+    console.error('Error in UpdateAutomationStatus:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+module.exports = { CreateWorkflowController, GetAllWorkflows, UpdateAutomationStatus };

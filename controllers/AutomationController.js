@@ -19,7 +19,7 @@ const revieveComment = async (username, mediaId, automationId) => {
 
 const createAutomation = async (req, res) => {
     try {
-        const { id, flowData, username, mediaId } = req.body; 
+        const { id, flowData } = req.body; 
         const { userId } = getAuth(req);
 
         console.log(id, flowData);
@@ -36,15 +36,28 @@ const createAutomation = async (req, res) => {
             return res.status(404).json({ message: 'Automation not found or not owned by user' });
         }
 
-        // 2. Check if flowData contains "get-comments"
-        const hasGetComments = flowData.nodes.some(
-            node => node.data?.selectedOption === "get-comments"
+        // 2. Check if flowData contains "get-comments" and extract post data
+        let username = null;
+        let mediaId = null;
+        
+        // Find nodes with get-comments option that have selectedPost data
+        const commentNodes = flowData.nodes.filter(
+            node => node.data?.selectedOption === "get-comments" && node.data?.selectedPost
         );
-
-        // 3. If yes, insert into comment_automation table
-        if (hasGetComments) {
-            const automationId = result[0].id;
-            await revieveComment(username, mediaId, automationId);
+        
+        if (commentNodes.length > 0) {
+            // Use the first node with get-comments that has post data
+            const node = commentNodes[0];
+            username = node.data.selectedPost?.username || 'default_user';
+            mediaId = node.data.selectedPost?.mediaId || node.data.selectedPost?.id;
+            
+            console.log('Found comment node with post data:', { username, mediaId });
+            
+            // 3. If we have valid data, insert into comment_automation table
+            if (username && mediaId) {
+                const automationId = result[0].id;
+                await revieveComment(username, mediaId, automationId);
+            }
         }
 
         return res.status(201).json({

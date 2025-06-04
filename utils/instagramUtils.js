@@ -7,7 +7,7 @@ const getAllInstagramPosts = async (req, res) => {
     const instagramToken = process.env.INSTAGRAM_TOKEN;
     try {
         const response = await instagramClient.get(
-            `https://graph.instagram.com/me/media?fields=id,caption,media_type,permalink&access_token=${instagramToken}`
+            `https://graph.instagram.com/me/media?fields=id,caption,media_type,username,permalink&access_token=${instagramToken}`
         );
         res.json(response.data); // Return as a route response
     } catch (error) {
