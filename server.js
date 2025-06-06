@@ -9,7 +9,7 @@ const port = process.env.PORT || 3000;
 const workflowRouter = require('./routes/workflow');
 const exampleRouter = require('./routes/example');
 const instagramRouter = require('./routes/instagram');
-const { replyToComment } = require('./utils/instagramUtils');
+const { getWebhook } = require('./controllers/InstagramController');
 
 app.use(clerkMiddleware());
 
@@ -112,24 +112,18 @@ app.get('/webhooks', (req, res) => {
   }
 });
 
-// Handle webhook events (POST)
-app.post('/webhooks', (req, res) => {
-  const { entry } = req.body;
-
+app.post('/webhooks', async (req, res) => {
   console.log('Webhook request body:', JSON.stringify(req.body, null, 2));
-
-  const change = req.body.entry?.[0]?.changes?.[0];
-  const username = change?.value?.from?.username;
-
-  if (change?.field === 'comments' && username !== 'rahul_r4441') {
-    const commentId = change.value.id;
-    const commentText = change.value.text;
-
-    replyToComment(commentId, commentText);
+  
+  try {
+    await getWebhook(req, res);
+  } catch (error) {
+    console.error('Error in webhook route:', error);
+    res.status(500).json({ 
+      message: 'Internal Server Error',
+      error: error.message 
+    });
   }
-
-  console.log('📩 Webhook event received:', JSON.stringify(entry, null, 2));
-  res.sendStatus(200);
 });
 
 

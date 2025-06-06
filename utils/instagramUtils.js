@@ -1,7 +1,70 @@
 require("dotenv").config();
 const axios = require('axios');
 const { gemini } = require("./geminiUtils");
+const { getPageId } = require("./PageUtils");
 const instagramClient = axios;
+
+
+
+const sendMessage = async (recipientId, messageText) => {
+  const pageAccessToken = process.env.INSTAGRAM_TOKEN;
+  
+  // Validate inputs
+  if (!pageAccessToken) {
+    console.error('Instagram page access token is missing');
+    return null;
+  }
+  
+  if (!recipientId || !messageText) {
+    console.error('Recipient ID and message text are required');
+    return null;
+  }
+
+  try {
+    const response = await fetch(
+      `https://graph.instagram.com/v21.0/me/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          recipient: {
+            id: recipientId
+          },
+          message: {
+            text: messageText
+          },
+          access_token: pageAccessToken
+        })
+      }
+    );
+
+    console.log('Response status:', response.status, response.statusText);
+    const data = await response.json();
+
+    // Handle API errors
+    if (!response.ok) {
+      console.error('Send Message Error:', {
+        status: response.status,
+        error: data.error || data,
+        headers: {
+          'www-authenticate': response.headers.get('www-authenticate'),
+          'x-fb-request-id': response.headers.get('x-fb-request-id')
+        }
+      });
+      return null;
+    }
+
+    console.log('✅ Message sent successfully:', data);
+    return data;
+
+  } catch (error) {
+    console.error('Network error while sending message:', error.message);
+    return null;
+  }
+};
+
 
 const getAllInstagramPosts = async (req, res) => {
     const instagramToken = process.env.INSTAGRAM_TOKEN;
@@ -133,5 +196,6 @@ RESPONSE:`
 module.exports = {
     getAllInstagramPosts,
     getPostComments,
-    replyToComment
+    replyToComment,
+    sendMessage,
 };

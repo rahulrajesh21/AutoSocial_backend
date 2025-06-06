@@ -1,77 +1,247 @@
 const sql = require('../config/database');
 const { getAuth } = require('@clerk/express');
 
-
-const revieveComment = async (username, mediaId, automationId) => {
-    try {
-        const result = await sql`
-            INSERT INTO comment_automation (automation_id, username, media_id)
-            VALUES (${automationId}, ${username}, ${mediaId})
-            RETURNING *;
-        `;
-        console.log('Comment automation created:', result[0]);
-        return result[0];
-    } catch (error) {
-        console.error('Error in revieveComment:', error);
-        throw error;
+// Dynamic automation handlers for different trigger types
+const automationHandlers = {
+  'get-comments': async (automationId, nodeData) => {
+    const { username, mediaId } = nodeData.selectedPost || {};
+    if (username && mediaId) {
+      return await sql`
+        INSERT INTO comment_automation (automation_id, username, media_id)
+        VALUES (${automationId}, ${username}, ${mediaId})
+        RETURNING *;
+      `;
     }
+    return null;
+  },
+
+  'receive-message': async (automationId, nodeData) => {
+    // For receive-message, we might want to store trigger conditions
+    return await sql`
+      INSERT INTO message_automation (automation_id, trigger_type, conditions)
+      VALUES (${automationId}, 'receive-message', ${JSON.stringify(nodeData)})
+      RETURNING *;
+    `;
+  },
+
+  'send-message': async (automationId, nodeData) => {
+    // For send-message, we might want to store the message template
+    return await sql`
+      INSERT INTO action_automation (automation_id, action_type, action_data)
+      VALUES (${automationId}, 'send-message', ${JSON.stringify(nodeData)})
+      RETURNING *;
+    `;
+  },
+
+  'send-media': async (automationId, nodeData) => {
+    return await sql`
+      INSERT INTO action_automation (automation_id, action_type, action_data)
+      VALUES (${automationId}, 'send-media', ${JSON.stringify(nodeData)})
+      RETURNING *;
+    `;
+  }
+};
+
+// Generic function to process automation nodes
+const processAutomationNodes = async (automationId, flowData) => {
+  const results = [];
+  
+  // Find all trigger nodes (nodes that start the automation)
+  const triggerNodes = flowData.nodes.filter(node => {
+    const selectedOption = node.data?.selectedOption;
+    return selectedOption && automationHandlers[selectedOption];
+  });
+
+  // Process each trigger node
+  for (const node of triggerNodes) {
+    const { selectedOption } = node.data;
+    const handler = automationHandlers[selectedOption];
+    
+    if (handler) {
+      try {
+        const result = await handler(automationId, node.data);
+        if (result) {
+          results.push({
+            nodeId: node.id,
+            type: selectedOption,
+            result: result[0] || result
+          });
+        }
+      } catch (error) {
+        console.error(`Error processing ${selectedOption} node:`, error);
+        results.push({
+          nodeId: node.id,
+          type: selectedOption,
+          error: error.message
+        });
+      }
+    }
+  }
+
+  return results;
+};
+
+// Enhanced function to analyze flow structure
+const analyzeFlowStructure = (flowData) => {
+  const analysis = {
+    triggers: [],
+    actions: [],
+    processors: [],
+    connections: []
+  };
+
+  // Categorize nodes
+  flowData.nodes.forEach(node => {
+    const { type, data } = node;
+    const selectedOption = data?.selectedOption;
+
+    if (type === 'instgram') {
+      if (selectedOption?.includes('receive') || selectedOption?.includes('get')) {
+        analysis.triggers.push({
+          id: node.id,
+          type: selectedOption,
+          data: data
+        });
+      } else if (selectedOption?.includes('send')) {
+        analysis.actions.push({
+          id: node.id,
+          type: selectedOption,
+          data: data
+        });
+      }
+    } else if (type === 'gemini') {
+      analysis.processors.push({
+        id: node.id,
+        type: 'gemini',
+        data: data
+      });
+    }
+  });
+
+  // Analyze connections
+  flowData.edges.forEach(edge => {
+    analysis.connections.push({
+      from: edge.source,
+      to: edge.target,
+      animated: edge.animated
+    });
+  });
+
+  return analysis;
 };
 
 const createAutomation = async (req, res) => {
-    try {
-        const { id, flowData } = req.body; 
-        const { userId } = getAuth(req);
+  try {
+    const { id, flowData } = req.body;
+    const { userId } = getAuth(req);
+    
+    console.log('Processing automation:', { id, userId });
 
-        console.log(id, flowData);
+    // 1. Save the flowData in automations table
+    const result = await sql`
+      UPDATE automations
+      SET automation_template = ${flowData}
+      WHERE id = ${id} AND user_id = ${userId}
+      RETURNING *;
+    `;
 
-        // 1. Save the flowData in automations table
-        const result = await sql`
-            UPDATE automations
-            SET automation_template = ${flowData}
-            WHERE id = ${id} AND user_id = ${userId}
-            RETURNING *;
-        `;
-
-        if (result.length === 0) {
-            return res.status(404).json({ message: 'Automation not found or not owned by user' });
-        }
-
-        // 2. Check if flowData contains "get-comments" and extract post data
-        let username = null;
-        let mediaId = null;
-        
-        // Find nodes with get-comments option that have selectedPost data
-        const commentNodes = flowData.nodes.filter(
-            node => node.data?.selectedOption === "get-comments" && node.data?.selectedPost
-        );
-        
-        if (commentNodes.length > 0) {
-            // Use the first node with get-comments that has post data
-            const node = commentNodes[0];
-            username = node.data.selectedPost?.username || 'default_user';
-            mediaId = node.data.selectedPost?.mediaId || node.data.selectedPost?.id;
-            
-            console.log('Found comment node with post data:', { username, mediaId });
-            
-            // 3. If we have valid data, insert into comment_automation table
-            if (username && mediaId) {
-                const automationId = result[0].id;
-                await revieveComment(username, mediaId, automationId);
-            }
-        }
-
-        return res.status(201).json({
-            message: 'Automation created successfully',
-            data: result[0],
-        });
-
-    } catch (err) {
-        console.error('Error in createAutomation:', err);
-        return res.status(500).json({ error: 'Internal Server Error' });
+    if (result.length === 0) {
+      return res.status(404).json({ 
+        message: 'Automation not found or not owned by user' 
+      });
     }
+
+    const automationId = result[0].id;
+
+    // 2. Analyze flow structure
+    const flowAnalysis = analyzeFlowStructure(flowData);
+    console.log('Flow analysis:', flowAnalysis);
+
+    // 3. Process automation nodes dynamically
+    const processingResults = await processAutomationNodes(automationId, flowData);
+    console.log('Processing results:', processingResults);
+    // 4. Save metadata about the automation
+    await sql`
+      INSERT INTO automation_metadata (automation_id, flow_analysis, processing_results)
+      VALUES (${automationId}, ${JSON.stringify(flowAnalysis)}, ${JSON.stringify(processingResults)})
+      ON CONFLICT (automation_id) 
+      DO UPDATE SET 
+        flow_analysis = ${JSON.stringify(flowAnalysis)},
+        processing_results = ${JSON.stringify(processingResults)},
+        updated_at = NOW();
+    `;
+
+    return res.status(201).json({
+      message: 'Automation created successfully',
+      data: result[0],
+      flowAnalysis,
+      processingResults
+    });
+
+  } catch (err) {
+    console.error('Error in createAutomation:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
 };
 
+// Webhook handler for processing incoming events
+const handleWebhook = async (req, res) => {
+  try {
+    const webhookData = req.body;
+    
+    // Find matching automations based on the webhook type
+    const automations = await sql`
+      SELECT a.*, am.flow_analysis 
+      FROM automations a
+      JOIN automation_metadata am ON a.id = am.automation_id
+      WHERE a.status = 'active';
+    `;
+
+    for (const automation of automations) {
+      const flowAnalysis = automation.flow_analysis;
+      
+      // Check if this automation should be triggered by this webhook
+      const shouldTrigger = checkTriggerConditions(webhookData, flowAnalysis);
+      
+      if (shouldTrigger) {
+        await executeAutomation(automation, webhookData);
+      }
+    }
+
+    res.status(200).json({ message: 'Webhook processed successfully' });
+  } catch (error) {
+    console.error('Error processing webhook:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+// Helper function to check if automation should be triggered
+const checkTriggerConditions = (webhookData, flowAnalysis) => {
+  // Implement logic to match webhook data with automation triggers
+  // This is a simplified example
+  if (webhookData.object === 'instagram' && webhookData.entry) {
+    const changes = webhookData.entry[0]?.changes || [];
+    const commentChange = changes.find(change => change.field === 'comments');
+    
+    if (commentChange && flowAnalysis.triggers.some(t => t.type === 'get-comments')) {
+      return true;
+    }
+  }
+  
+  return false;
+};
+
+// Helper function to execute automation
+const executeAutomation = async (automation, webhookData) => {
+  console.log(`Executing automation ${automation.id} for webhook:`, webhookData);
+  // Implement automation execution logic based on the flow
+  // This would involve processing the nodes in the correct order
+  // based on the edges and executing the appropriate actions
+};
 
 module.exports = {
-    createAutomation
+  createAutomation,
+  handleWebhook,
+  processAutomationNodes,
+  analyzeFlowStructure
 };

@@ -1,4 +1,3 @@
-const { fetchData, insertData } = require('../utils/supabaseUtils');
 const supabase = require('../config/database');
 const sql = require('../config/database');
 const { getAuth } = require('@clerk/express');
