@@ -59,6 +59,35 @@ const GetAllWorkflows = async (req, res) => {
   }
 };
 
+// Get a specific workflow by ID
+const GetWorkflowById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = getAuth(req);
+    
+    console.log(`Fetching workflow with ID: ${id} for user: ${userId}`);
+    
+    const result = await sql`
+      SELECT automations.*
+      FROM automations
+      WHERE id = ${id} AND user_id = ${userId};
+    `;
+
+    if (result.length === 0) {
+      return res.status(404).json({ message: 'Workflow not found or not owned by user' });
+    }
+    
+    console.log('Retrieved workflow:', result[0]);
+    return res.status(200).json({
+      message: 'Workflow retrieved successfully',
+      data: result[0],
+    });
+  } catch (err) {
+    console.error('Error in GetWorkflowById:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
 // Update automation status (active/inactive)
 const UpdateAutomationStatus = async (req, res) => {
   try {
@@ -92,4 +121,4 @@ const UpdateAutomationStatus = async (req, res) => {
   }
 };
 
-module.exports = { CreateWorkflowController, GetAllWorkflows, UpdateAutomationStatus };
+module.exports = { CreateWorkflowController, GetAllWorkflows, UpdateAutomationStatus, GetWorkflowById };

@@ -1,6 +1,7 @@
 const InstagramUtils = require('../utils/instagramUtils');
 const sql = require('../config/database');
 const { replyToComment, sendMessage, sendMedia } = require('../utils/instagramUtils');
+const { gemini } = require('../utils/geminiUtils');
 
 // Webhook automation processors
 const automationProcessors = {
@@ -100,27 +101,43 @@ const nodeExecutors = {
 
     // Replace placeholders with actual data
     if (context.commentText) {
-      processedPrompt = prompt.replace('{{comment}}', context.commentText);
+      processedPrompt = processedPrompt.replace(/\{\{comment\}\}/g, context.commentText);
     }
     if (context.messageText) {
-      processedPrompt = prompt.replace('{{message}}', context.messageText);
+      processedPrompt = processedPrompt.replace(/\{\{message\}\}/g, context.messageText);
     }
     if (context.username) {
-      processedPrompt = prompt.replace('{{username}}', context.username);
+      processedPrompt = processedPrompt.replace(/\{\{username\}\}/g, context.username);
     }
     if (context.senderId) {
-      processedPrompt = prompt.replace('{{sender_id}}', context.senderId);
+      processedPrompt = processedPrompt.replace(/\{\{sender_id\}\}/g, context.senderId);
     }
 
-    console.log('Processing with Gemini:', processedPrompt);
+    // Build a more comprehensive prompt with context
+    let fullPrompt = processedPrompt;
     
-    // Here you would call your Gemini AI service
-    // const geminiResponse = await callGeminiAPI(processedPrompt);
+    // Add user message as context if available
+    if (context.triggerType === 'message' && context.messageText) {
+      // If the prompt doesn't already contain the message, add it as context
+      if (!prompt.includes('{{message}}')) {
+        fullPrompt = `User message: "${context.messageText}"\n\nYour instructions: ${processedPrompt}`;
+      }
+    } else if (context.triggerType === 'comment' && context.commentText) {
+      // If the prompt doesn't already contain the comment, add it as context
+      if (!prompt.includes('{{comment}}')) {
+        fullPrompt = `Instagram comment from ${context.username || 'user'}: "${context.commentText}"\n\nYour instructions: ${processedPrompt}`;
+      }
+    }
+
+    console.log('Processing with Gemini:', fullPrompt);
+    
+    // Call the Gemini AI service
+    const geminiResponse = await gemini(fullPrompt);
     
     return {
-      success: true,
-      output: `AI Response for: ${processedPrompt}`, // Replace with actual Gemini response
-      data: { aiResponse: 'Sample AI response' }
+      success: !!geminiResponse,
+      output: geminiResponse || 'Failed to get AI response',
+      data: { aiResponse: geminiResponse }
     };
   },
 
@@ -145,7 +162,7 @@ const nodeExecutors = {
         }
         break;
 
-      case 'reply-to-comment':
+      case 'reply-comment':
         if (context.commentId) {
           const replyText = previousOutput?.data?.aiResponse || node.data?.replyText || 'Thanks for your comment!';
           await replyToComment(context.commentId, replyText);
