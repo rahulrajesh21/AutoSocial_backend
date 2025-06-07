@@ -21,6 +21,7 @@ const sendMessage = async (recipientId, messageText) => {
   }
 
   try {
+    console.log('Sending message to recipient:', recipientId);
     const response = await fetch(
       `https://graph.instagram.com/v21.0/me/messages`,
       {

@@ -10,6 +10,7 @@ const automationProcessors = {
     const username = changeData.value.from.username;
     const commentId = changeData.value.id;
     const commentText = changeData.value.text;
+    const user_id = changeData.value.from.id;
 
     // Check if this matches the automation's media
     const commentAutomation = await sql`
@@ -28,6 +29,7 @@ const automationProcessors = {
             commentText,
             username,
             mediaId,
+            user_id,
             triggerType: 'comment'
           }
         };
@@ -43,11 +45,11 @@ const automationProcessors = {
       return { shouldExecute: false };
     }
 
-    // Handle direct message webhooks
-    const senderId = messagingData.sender.id;
+    // Handle direct message webhooksx
+    const senderId = messagingData.sender.id || messagingData.value.from.id;
     const recipientId = messagingData.recipient.id;
-    const messageText = messagingData.message.text;
-    const messageId = messagingData.message.mid;
+    const messageText = messagingData.message.text || messagingData.value.text;
+    const messageId = messagingData.message.mid ||  messagingData.value.id;
     const timestamp = messagingData.timestamp;
 
     console.log('Processing message:', { senderId, messageText, messageId });
@@ -147,7 +149,8 @@ const nodeExecutors = {
     switch (selectedOption) {
       case 'send-message':
         if (context.senderId || context.username) {
-          const targetId = context.senderId || context.username;
+          console.log("=======================",context)
+          const targetId = context.senderId || context.user_id || context.username;
           const message = previousOutput?.data?.aiResponse || node.data?.message || 'Hello!';
           await sendMessage(targetId, message);
           return { success: true, output: `Message sent to ${targetId}` };
