@@ -17,8 +17,5 @@
       "path": "/api/cron/check-scheduled-posts",
       "schedule": "0 0 * * *"
     }
-  ],
-  "env": {
-    "CRON_SECRET": "@cron_secret"
-  }
+  ]
 }
