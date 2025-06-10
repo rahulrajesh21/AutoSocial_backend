@@ -1,8 +1,9 @@
 const sql = require('../../config/database');
 
 export default async function handler(req, res) {
-  // Verify the request is from Vercel Cron
-  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+  // Verify the request is from Vercel Cron using the proper Bearer format
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

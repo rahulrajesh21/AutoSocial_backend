@@ -7,39 +7,68 @@ This guide explains how to deploy the AutoSocial backend to Vercel with schedule
 1. **Create a Vercel Project**
    - Connect your GitHub repository to Vercel
    - Set the root directory to `AutoSocial_backend`
-   - Set the build command to `npm install`
-   - Set the output directory to `.`
+   - Framework Preset: Select "Other"
+   - Build Command: Leave as default (Vercel will use settings from vercel.json)
+   - Output Directory: Leave as default
 
 2. **Configure Environment Variables**
    - Add all required environment variables from your `.env` file to Vercel
-   - Create a new secret called `CRON_SECRET` with a strong random value for securing cron job endpoints
+   - Create a new secret called `CRON_SECRET` with a strong random string (at least 16 characters)
+   - You can use a password generator like 1Password to create a secure value
 
-3. **Verify Cron Job Configuration**
-   - The `vercel.json` file includes the cron job configuration
-   - The cron job is set to run every minute (`* * * * *`)
-   - You can adjust this schedule as needed
+3. **Deploy Your Project**
+   - Click "Deploy" in the Vercel dashboard
+   - Alternatively, use the Vercel CLI:
+     ```
+     npm install -g vercel
+     cd AutoSocial_backend
+     vercel
+     ```
+   - For production deployment with CLI: `vercel --prod`
 
-## How It Works
+## Cron Job Configuration
 
-Instead of using `node-cron` which requires a long-running server, this project uses Vercel Cron Jobs:
+- The cron job is configured in `vercel.json` to run once daily at midnight (`0 0 * * *`)
+- The endpoint `/api/cron/check-scheduled-posts` will be called automatically by Vercel
+- The endpoint is secured with the `CRON_SECRET` environment variable
 
-1. Vercel will call the API endpoint `/api/cron/check-scheduled-posts` according to the schedule
-2. The endpoint checks for due scheduled posts and processes them
-3. Each request is authenticated using the `CRON_SECRET` environment variable
+## Monitoring and Management
 
-## Monitoring
+1. **View Cron Jobs**
+   - Select your project from the Vercel dashboard
+   - Select the Settings tab
+   - Select the Cron Jobs tab from the left sidebar
 
-You can monitor your cron jobs in the Vercel dashboard:
+2. **View Logs**
+   - From the list of cron jobs, select "View Logs"
+   - This will show you runtime logs with a filter for your cron job
 
-1. Go to your project in the Vercel dashboard
-2. Navigate to the "Cron Jobs" tab
-3. View the execution history and logs
+3. **Maintenance**
+   - **Update Schedule**: Change the expression in vercel.json and redeploy
+   - **Delete Cron Job**: Remove the configuration from vercel.json and redeploy
+   - **Disable Cron Job**: Navigate to the Cron Jobs tab and click "Disable Cron Jobs"
 
-## Troubleshooting
+## Important Notes
 
-- If cron jobs aren't running, verify that the `CRON_SECRET` environment variable is set correctly
-- Check the function logs in the Vercel dashboard for any errors
-- Note that Vercel's free tier has limitations on cron job frequency and execution time
+1. **Cron Job Accuracy**
+   - On Hobby plan, cron jobs have hourly accuracy (may run anytime within the specified hour)
+   - On Pro/Enterprise plans, cron jobs run within the minute specified
+
+2. **Duration Limits**
+   - Cron jobs have the same duration limits as Serverless Functions
+   - If you need more processing time, consider splitting your job or using a queue system
+
+3. **Error Handling**
+   - Vercel will not retry failed cron jobs
+   - Check logs through the "View Log" button in the Cron Jobs tab
+
+4. **Testing Locally**
+   - You can test your cron endpoint locally by making a request to: http://localhost:3000/api/cron/check-scheduled-posts
+   - Remember to set the Authorization header: `Bearer YOUR_CRON_SECRET`
+
+5. **Rollbacks**
+   - If you rollback to a previous deployment, active cron jobs will not be updated
+   - They will continue to run as scheduled until manually disabled or updated
 
 ## Local Development
 
