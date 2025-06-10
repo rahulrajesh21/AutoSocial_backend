@@ -15,7 +15,7 @@
   "crons": [
     {
       "path": "/api/cron/check-scheduled-posts",
-      "schedule": "* * * * *"
+      "schedule": "0 0 * * *"
     }
   ],
   "env": {
