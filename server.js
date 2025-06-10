@@ -3,8 +3,10 @@ const express = require('express');
 const { clerkMiddleware } = require('@clerk/express');
 const cors = require('cors');
 const path = require('path');
+const multer = require('multer'); // Add this for handling multipart/form-data
 const app = express();
 const port = process.env.PORT || 3000;
+// Cron jobs are now handled by Vercel Cron
 
 const workflowRouter = require('./routes/workflow');
 const exampleRouter = require('./routes/example');
@@ -12,7 +14,6 @@ const instagramRouter = require('./routes/instagram');
 const { getWebhook } = require('./controllers/InstagramController');
 
 app.use(clerkMiddleware());
-
 
 app.use(
   cors({
@@ -24,12 +25,23 @@ app.use(
 );
 
 // ✅ Parse JSON bodies
-app.use(express.json());
+app.use(express.json({ limit: '10mb'}));
+
+// ✅ Add multer middleware for handling multipart/form-data
+const upload = multer({ 
+  limits: { 
+    fileSize: 50 * 1024 * 1024 // 50MB limit
+  }
+});
+
+// Apply multer middleware to routes that need file upload
+app.use('/api/CreateScheduleAutomation', upload.single('media'));
 
 // ✅ Routes (clerkAuth is now applied only in workflowRouter)
 app.use('/api', workflowRouter);
 app.use('/api/data', exampleRouter);
 app.use('/api/instagram', instagramRouter);
+app.use('/uploads', express.static('uploads'));
 
 // ✅ Root route
 app.get('/', (req, res) => {
@@ -125,7 +137,6 @@ app.post('/webhooks', async (req, res) => {
     });
   }
 });
-
 
 // ✅ Start server
 app.listen(port, () => {
