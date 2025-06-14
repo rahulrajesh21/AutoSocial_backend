@@ -11,6 +11,7 @@ const automationProcessors = {
     const commentId = changeData.value.id;
     const commentText = changeData.value.text;
     const user_id = changeData.value.from.id;
+  
 
     // Check if this matches the automation's media
     const commentAutomation = await sql`
@@ -18,6 +19,7 @@ const automationProcessors = {
       WHERE automation_id = ${automation.id} 
       AND media_id = ${mediaId}
     `;
+    const receiverId = commentAutomation[0].username;
 
     if (commentAutomation.length > 0) {
       // Don't reply to the post owner's own comments
@@ -28,6 +30,7 @@ const automationProcessors = {
             commentId,
             commentText,
             username,
+            receiverId,
             mediaId,
             user_id,
             triggerType: 'comment'
@@ -59,6 +62,7 @@ const automationProcessors = {
       SELECT * FROM message_automation 
       WHERE automation_id = ${automation.id}
     `;
+    const receiverId = messageAutomation[0].username;
 
     if (messageAutomation.length > 0) {
       return {
@@ -67,6 +71,7 @@ const automationProcessors = {
           senderId,
           recipientId,
           messageText,
+          receiverId,
           messageId,
           timestamp,
           triggerType: 'message'
@@ -149,10 +154,12 @@ const nodeExecutors = {
     switch (selectedOption) {
       case 'send-message':
         if (context.senderId || context.username) {
+          console.log("=======================",context.senderId,context.user_id,context.username)
           console.log("=======================",context)
           const targetId = context.senderId || context.user_id || context.username;
           const message = previousOutput?.data?.aiResponse || node.data?.message || 'Hello!';
-          await sendMessage(targetId, message);
+          const userId = context.receiverId;
+          await sendMessage(targetId, message,userId);
           return { success: true, output: `Message sent to ${targetId}` };
         }
         break;
@@ -160,7 +167,8 @@ const nodeExecutors = {
       case 'send-media':
         if ((context.senderId || context.username) && node.data?.mediaUrl) {
           const targetId = context.senderId || context.username;
-          await sendMedia(targetId, node.data.mediaUrl);
+          const userId = automation?.user_id;
+          await sendMedia(targetId, node.data.mediaUrl, userId);
           return { success: true, output: `Media sent to ${targetId}` };
         }
         break;
@@ -168,7 +176,8 @@ const nodeExecutors = {
       case 'reply-comment':
         if (context.commentId) {
           const replyText = previousOutput?.data?.aiResponse || node.data?.replyText || 'Thanks for your comment!';
-          await replyToComment(context.commentId, replyText);
+          const userId = automation?.user_id;
+          await replyToComment(context.commentId, replyText, userId);
           return { success: true, output: `Reply sent to comment ${context.commentId}` };
         }
         break;
@@ -335,6 +344,13 @@ const getWebhook = async (req, res) => {
       for (const messagingEvent of entry.messaging) {
         const eventType = getMessageEventType(messagingEvent);
         console.log(`Processing messaging event of type: ${eventType}`, messagingEvent);
+
+        // Skip echo messages (messages sent by the page itself)
+        if (messagingEvent.message && messagingEvent.message.is_echo) {
+          console.log(`Skipping echo message event`);
+          skippedEvents.push({ type: 'echo_message', reason: 'Message sent by page' });
+          continue;
+        }
 
         // Only process actual text messages
         if (eventType !== 'text_message') {

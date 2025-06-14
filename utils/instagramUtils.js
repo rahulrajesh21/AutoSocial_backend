@@ -2,11 +2,51 @@ require("dotenv").config();
 const axios = require('axios');
 const { gemini } = require("./geminiUtils");
 const { getPageId } = require("./PageUtils");
+const sql = require('../config/database');
 const instagramClient = axios;
 
+// Function to get tokens from the database for a user
+const getTokensForUser = async (userId) => {
+  try {
+    // If no userId provided, use default tokens from env
+    if (!userId) {
+      return {
+        accessToken: process.env.INSTAGRAM_TOKEN,
+        pageAccessToken: process.env.INSTAGRAM_PAGE || process.env.INSTAGRAM_TOKEN
+      };
+    }
+    
+    // Get tokens from database
+    const settings = await sql`
+      SELECT access_token, page_access_token 
+      FROM users 
+      WHERE username = ${userId}
+    `;
+    
+    if (settings.length === 0 || (!settings[0].access_token && !settings[0].page_access_token)) {
+      // Fallback to env variables if no settings found
+      return {
+        accessToken: process.env.INSTAGRAM_TOKEN,
+        pageAccessToken: process.env.INSTAGRAM_PAGE || process.env.INSTAGRAM_TOKEN
+      };
+    }
+    
+    return {
+      accessToken: settings[0].access_token,
+      pageAccessToken: settings[0].page_access_token || settings[0].access_token
+    };
+  } catch (error) {
+    console.error('Error getting tokens from database:', error);
+    // Fallback to env variables
+    return {
+      accessToken: process.env.INSTAGRAM_TOKEN,
+      pageAccessToken: process.env.INSTAGRAM_PAGE || process.env.INSTAGRAM_TOKEN
+    };
+  }
+};
 
-const getInstagramUserId = async () => {
-  const pageAccessToken = process.env.INSTAGRAM_PAGE || process.env.INSTAGRAM_TOKEN;
+const getInstagramUserId = async (userId) => {
+  const { pageAccessToken } = await getTokensForUser(userId);
   
   if (!pageAccessToken) {
     console.error('Instagram page access token is missing');
@@ -59,9 +99,9 @@ const getInstagramUserId = async () => {
   }
 };
 
-const createInstagramPost = async (imageUrl, caption = '') => {
-  const pageAccessToken = process.env.INSTAGRAM_PAGE || process.env.INSTAGRAM_TOKEN;
-  const igUserId = await getInstagramUserId();
+const createInstagramPost = async (imageUrl, caption = '', userId) => {
+  const { pageAccessToken } = await getTokensForUser(userId);
+  const igUserId = await getInstagramUserId(userId);
   
   if (!igUserId) {
     console.error('Could not get Instagram User ID');
@@ -135,9 +175,9 @@ const createInstagramPost = async (imageUrl, caption = '') => {
 };
 
 
-const createInstagramVideoPost = async (videoUrl, caption = '') => {
-  const pageAccessToken = process.env.INSTAGRAM_PAGE || process.env.INSTAGRAM_TOKEN;
-  const igUserId = await getInstagramUserId();
+const createInstagramVideoPost = async (videoUrl, caption = '', userId) => {
+  const { pageAccessToken } = await getTokensForUser(userId);
+  const igUserId = await getInstagramUserId(userId);
   
   if (!igUserId) {
     console.error('Could not get Instagram User ID');
@@ -244,9 +284,9 @@ const createInstagramVideoPost = async (videoUrl, caption = '') => {
 };
 
 
-const createInstagramCarousel = async (mediaItems, caption = '') => {
-  const pageAccessToken = process.env.INSTAGRAM_PAGE || process.env.INSTAGRAM_TOKEN;
-  const igUserId = await getInstagramUserId();
+const createInstagramCarousel = async (mediaItems, caption = '', userId) => {
+  const { pageAccessToken } = await getTokensForUser(userId);
+  const igUserId = await getInstagramUserId(userId);
   
   if (!igUserId) {
     console.error('Could not get Instagram User ID');
@@ -355,11 +395,13 @@ const createInstagramCarousel = async (mediaItems, caption = '') => {
 
 
 
-const sendMessage = async (recipientId, messageText) => {
-  const pageAccessToken = process.env.INSTAGRAM_TOKEN;
+const sendMessage = async (recipientId, messageText, userId) => {
+  const { accessToken } = await getTokensForUser(userId);
+  console.log('userId', userId);
+  console.log('pageAccessToken', accessToken);
   
   // Validate inputs
-  if (!pageAccessToken) {
+  if (!accessToken) {
     console.error('Instagram page access token is missing');
     return null;
   }
@@ -368,6 +410,10 @@ const sendMessage = async (recipientId, messageText) => {
     console.error('Recipient ID and message text are required');
     return null;
   }
+
+  // Prevent sending messages to your own page ID
+  // This prevents errors when processing echo messages
+  
 
   try {
     console.log('Sending message to recipient:', recipientId);
@@ -385,7 +431,7 @@ const sendMessage = async (recipientId, messageText) => {
           message: {
             text: messageText
           },
-          access_token: pageAccessToken
+          access_token: accessToken
         })
       }
     );
@@ -415,12 +461,85 @@ const sendMessage = async (recipientId, messageText) => {
   }
 };
 
+const sendMedia = async (recipientId, mediaUrl, userId) => {
+  const { pageAccessToken } = await getTokensForUser(userId);
+  
+  // Validate inputs
+  if (!pageAccessToken) {
+    console.error('Instagram page access token is missing');
+    return null;
+  }
+  
+  if (!recipientId || !mediaUrl) {
+    console.error('Recipient ID and media URL are required');
+    return null;
+  }
+
+  // Prevent sending messages to your own page ID
+  // This prevents errors when processing echo messages
+  if (recipientId === '17841474898287093') {
+    console.log('Skipping media message to self (page ID)');
+    return { skipped: true, reason: 'Cannot send message to self' };
+  }
+
+  try {
+    console.log('Sending media to recipient:', recipientId);
+    const response = await fetch(
+      `https://graph.instagram.com/v21.0/me/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          recipient: {
+            id: recipientId
+          },
+          message: {
+            attachment: {
+              type: 'image',
+              payload: {
+                url: mediaUrl
+              }
+            }
+          },
+          access_token: pageAccessToken
+        })
+      }
+    );
+
+    console.log('Response status:', response.status, response.statusText);
+    const data = await response.json();
+
+    // Handle API errors
+    if (!response.ok) {
+      console.error('Send Media Error:', {
+        status: response.status,
+        error: data.error || data,
+        headers: {
+          'www-authenticate': response.headers.get('www-authenticate'),
+          'x-fb-request-id': response.headers.get('x-fb-request-id')
+        }
+      });
+      return null;
+    }
+
+    console.log('✅ Media sent successfully:', data);
+    return data;
+
+  } catch (error) {
+    console.error('Network error while sending media:', error.message);
+    return null;
+  }
+};
 
 const getAllInstagramPosts = async (req, res) => {
-    const instagramToken = process.env.INSTAGRAM_TOKEN;
+    const userId = req.user?.id;
+    const { accessToken } = await getTokensForUser(userId);
+    
     try {
         const response = await instagramClient.get(
-            `https://graph.instagram.com/me/media?fields=id,caption,media_type,username,permalink&access_token=${instagramToken}`
+            `https://graph.instagram.com/me/media?fields=id,caption,media_type,username,permalink&access_token=${accessToken}`
         );
         res.json(response.data); // Return as a route response
     } catch (error) {
@@ -429,9 +548,12 @@ const getAllInstagramPosts = async (req, res) => {
     }
 };
 
-const getPostComments = async () => {
-  const mediaId = '18068189869971923';
-  const pageAccessToken = process.env.INSTAGRAM_PAGE;
+const getPostComments = async (mediaId, userId) => {
+  if (!mediaId) {
+    mediaId = '18068189869971923'; // Default for testing
+  }
+  
+  const { pageAccessToken } = await getTokensForUser(userId);
   
   // Validate token exists
   if (!pageAccessToken) {
@@ -462,7 +584,9 @@ const getPostComments = async () => {
     }
     
     console.log('Comments:', data.data);
-    replyToComment(data.data[0].id,data.data[0].text); 
+    if (data.data && data.data.length > 0) {
+      replyToComment(data.data[0].id, data.data[0].text, userId);
+    }
     return data.data || [];
     
   } catch (error) {
@@ -471,11 +595,10 @@ const getPostComments = async () => {
   }
 };
 
-const replyToComment = async (commentId,userComment) => {
-  const pageAccessToken = process.env.INSTAGRAM_PAGE;
+const replyToComment = async (commentId, userComment, userId) => {
+  const { pageAccessToken } = await getTokensForUser(userId);
 
-
-    const replyText = await gemini(`You are a social media assistant for a trendy Instagram brand.
+  const replyText = await gemini(`You are a social media assistant for a trendy Instagram brand.
 
 ROLE: Social media community manager
 BRAND VOICE: Cool, casual, trendy, and authentic
@@ -495,8 +618,9 @@ COMMENT TO RESPOND TO:
 "${userComment}"
 
 RESPONSE:`
-)
-    console.log('Replying to comment:', replyText);
+  )
+  console.log('Replying to comment:', replyText);
+  
   if (!pageAccessToken) {
     console.error('Instagram page access token is missing');
     return null;
@@ -576,6 +700,7 @@ module.exports = {
     getPostComments,
     replyToComment,
     sendMessage,
+    sendMedia,
     getInstagramUserId,
     createInstagramPost,
     createInstagramVideoPost,
