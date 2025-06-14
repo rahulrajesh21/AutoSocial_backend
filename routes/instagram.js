@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth } = require('../middlewares/clerkAuth');
 const addUserDetails = require('../middlewares/Auth');
 const sql = require('../config/database');
+const { getWebhook, updateInstagramSettings, getInstagramSettings } = require('../controllers/InstagramController');
 
 /**
  * Save Instagram access token
@@ -93,5 +94,12 @@ router.get('/status', requireAuth, addUserDetails, async (req, res) => {
     res.status(500).json({ error: 'Failed to check Instagram status' });
   }
 });
+
+// Instagram webhook
+router.post('/webhook', getWebhook);
+
+// Instagram settings routes (protected with clerkAuth)
+router.post('/settings', requireAuth, addUserDetails, updateInstagramSettings);
+router.get('/settings', requireAuth, addUserDetails, getInstagramSettings);
 
 module.exports = router; 

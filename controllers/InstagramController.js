@@ -444,10 +444,109 @@ const verifyWebhook = (req, res) => {
   }
 };
 
-module.exports = { 
+// New methods for Instagram settings
+
+/**
+ * Get Instagram settings
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getInstagramSettings = async (req, res) => {
+  try {
+    // Check if req.user exists
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: 'Unauthorized - User not authenticated' });
+    }
+
+    const userId = req.user.id;
+
+    const settings = await sql`
+      SELECT access_token, page_access_token 
+      FROM users 
+      WHERE id = ${userId}
+    `;
+
+    if (settings.length === 0) {
+      return res.status(200).json({
+        access_token: null,
+        page_access_token: null
+      });
+    }
+
+    res.status(200).json({
+      access_token: settings[0].access_token,
+      page_access_token: settings[0].page_access_token
+    });
+  } catch (error) {
+    console.error('Error fetching Instagram settings:', error);
+    res.status(500).json({ error: 'Failed to fetch Instagram settings' });
+  }
+};
+
+/**
+ * Update Instagram settings
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const updateInstagramSettings = async (req, res) => {
+  try {
+    const { instagram_access_token, instagram_page_token, instagram_api_key } = req.body;
+    
+    // Check if req.user exists
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: 'Unauthorized - User not authenticated' });
+    }
+    
+    const userId = req.user.id;
+
+    if (!instagram_access_token && !instagram_page_token) {
+      return res.status(400).json({ error: 'At least one token is required' });
+    }
+
+    // Check if settings already exist for this user
+    const existingSettings = await sql`
+      SELECT id FROM users 
+      WHERE id = ${userId}
+    `;
+
+    if (existingSettings.length > 0) {
+      // Update existing settings
+      await sql`
+        UPDATE users
+        SET 
+          access_token = ${instagram_access_token},
+          page_access_token = ${instagram_page_token}
+        WHERE id = ${userId}
+      `;
+    } else {
+      // Create new settings
+      await sql`
+        INSERT INTO users (
+          id, 
+          access_token, 
+          page_access_token
+        ) VALUES (
+          ${userId}, 
+          ${instagram_access_token}, 
+          ${instagram_page_token}
+        )
+      `;
+    }
+
+    res.status(200).json({ success: true, message: 'Instagram settings updated successfully' });
+  } catch (error) {
+    console.error('Error updating Instagram settings:', error);
+    res.status(500).json({ error: 'Failed to update Instagram settings' });
+  }
+};
+
+// Export all methods
+module.exports = {
   getWebhook,
   verifyWebhook,
   executeAutomationFlow,
   buildExecutionPath,
-  getMessageEventType // Export for testing purposes
+  getMessageEventType,
+  updateInstagramSettings,
+  getInstagramSettings
 };
