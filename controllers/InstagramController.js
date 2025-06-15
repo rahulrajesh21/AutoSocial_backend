@@ -2,7 +2,6 @@ const InstagramUtils = require('../utils/instagramUtils');
 const sql = require('../config/database');
 const { replyToComment, sendMessage, sendMedia } = require('../utils/instagramUtils');
 const { gemini } = require('../utils/geminiUtils');
-const { getAuth } = require('@clerk/express');
 
 // Webhook automation processors
 const automationProcessors = {
@@ -257,9 +256,6 @@ Our team will review your case and respond within 24 hours.`;
         
         // Save generated ticket to database for future reference
         try {
-          // Get user ID from auth if available, fallback to static value for webhooks
-          const user_id = context.user_id || '1'; // Default to user ID 1 if not available
-          
           await sql`
             INSERT INTO help_desk_tickets (
               issue_type,
@@ -267,7 +263,6 @@ Our team will review your case and respond within 24 hours.`;
               priority,
               email,
               ticket_id,
-              user_id,
               status,
               created_at
             ) VALUES (
@@ -276,7 +271,6 @@ Our team will review your case and respond within 24 hours.`;
               ${ticketData.priority},
               ${ticketData.email},
               ${ticketData.ticketId},
-              ${user_id},
               'new',
               NOW()
             )
@@ -391,8 +385,18 @@ Our team will review your case and respond within 24 hours.`;
 
     // Save the ticket to the database first
     try {
-      // Get user ID from auth if available, fallback to static value for webhooks
-      const user_id = context.user_id || '1'; // Default to user ID 1 if not available
+      await sql`
+        CREATE TABLE IF NOT EXISTS help_desk_tickets (
+          id SERIAL PRIMARY KEY,
+          issue_type TEXT,
+          description TEXT,
+          priority TEXT,
+          email TEXT,
+          ticket_id TEXT,
+          status TEXT,
+          created_at TIMESTAMP
+        )
+      `;
       
       await sql`
         INSERT INTO help_desk_tickets (
@@ -401,7 +405,6 @@ Our team will review your case and respond within 24 hours.`;
           priority,
           email,
           ticket_id,
-          user_id,
           status,
           created_at
         ) VALUES (
@@ -410,7 +413,6 @@ Our team will review your case and respond within 24 hours.`;
           ${finalTicket.priority},
           ${finalTicket.email},
           ${finalTicket.ticketId || `TKT-${Date.now().toString().slice(-6)}`},
-          ${user_id},
           'new',
           NOW()
         )
@@ -923,17 +925,6 @@ const buildExecutionPath = (nodes, edges, startNodeId) => {
 // Main webhook handler
 const getWebhook = async (req, res) => {
   try {
-    // Try to get user ID from Clerk authentication if available
-    let userId;
-    try {
-      // This will work for authenticated requests but fail for webhook callbacks from Instagram
-      const authData = getAuth(req);
-      userId = authData?.userId;
-    } catch (authError) {
-      // Auth will fail for webhook callbacks - that's expected
-      console.log('Auth not available for webhook - this is normal for external callbacks');
-    }
-    
     const webhookData = req.body;
     console.log('Received webhook:', JSON.stringify(webhookData, null, 2));
 
@@ -1010,14 +1001,6 @@ const getWebhook = async (req, res) => {
               const result = await processor(messagingEvent, automation);
               
               if (result.shouldExecute) {
-                // Set user ID in context if available
-                if (userId) {
-                  result.context.user_id = userId;
-                } else {
-                  // If no auth, use the automation's user_id
-                  result.context.user_id = automation.user_id || '1';
-                }
-                
                 console.log(`Triggering message automation ${automation.id}`);
                 const executionResult = await executeAutomationFlow(automation, result.context);
                 executionResults.push({
@@ -1054,14 +1037,6 @@ const getWebhook = async (req, res) => {
                 const result = await processor(change, automation);
                 
                 if (result.shouldExecute) {
-                  // Set user ID in context if available
-                  if (userId) {
-                    result.context.user_id = userId;
-                  } else {
-                    // If no auth, use the automation's user_id
-                    result.context.user_id = automation.user_id || '1';
-                  }
-                  
                   console.log(`Triggering comment automation ${automation.id}`);
                   const executionResult = await executeAutomationFlow(automation, result.context);
                   executionResults.push({
