@@ -2,6 +2,7 @@ const InstagramUtils = require('../utils/instagramUtils');
 const sql = require('../config/database');
 const { replyToComment, sendMessage, sendMedia } = require('../utils/instagramUtils');
 const { gemini } = require('../utils/geminiUtils');
+const axios = require('axios');
 
 // Webhook automation processors
 const automationProcessors = {
@@ -1190,6 +1191,50 @@ const updateInstagramSettings = async (req, res) => {
   }
 };
 
+/**
+ * Exchange a short-lived token for a long-lived token
+ * POST /api/instagram/exchange-token
+ */
+const exchangeToken = async (req, res) => {
+  try {
+    const { shortLivedToken } = req.body;
+    
+    if (!shortLivedToken) {
+      return res.status(400).json({ error: 'Short-lived token is required' });
+    }
+    
+    // Facebook Graph API endpoint for token exchange
+    const response = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
+      params: {
+        grant_type: 'fb_exchange_token',
+        client_id: process.env.FACEBOOK_APP_ID,
+        client_secret: process.env.FACEBOOK_APP_SECRET,
+        fb_exchange_token: shortLivedToken
+      }
+    });
+    
+    if (!response.data || !response.data.access_token) {
+      return res.status(400).json({ error: 'Failed to exchange token' });
+    }
+    
+    const longLivedToken = response.data.access_token;
+    const expiresIn = response.data.expires_in || 5184000; // Default to 60 days if not provided
+    
+    // Return the long-lived token
+    res.status(200).json({
+      success: true,
+      access_token: longLivedToken,
+      expires_in: expiresIn
+    });
+  } catch (error) {
+    console.error('Error exchanging token:', error.response?.data || error.message);
+    res.status(500).json({ 
+      error: 'Failed to exchange token',
+      details: error.response?.data || error.message
+    });
+  }
+};
+
 // Export all methods
 module.exports = { 
   getWebhook,
@@ -1198,5 +1243,6 @@ module.exports = {
   buildExecutionPath,
   getMessageEventType,
   updateInstagramSettings,
-  getInstagramSettings
+  getInstagramSettings,
+  exchangeToken
 };

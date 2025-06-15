@@ -48,11 +48,18 @@ The current test coverage focuses on:
 
 1. **WorkflowController**: Tests for creating, retrieving, and updating workflows (78.57% line coverage)
 2. **AutomationController**: Tests for creating automations and processing flow data (72.28% line coverage)
-3. **exampleController**: Tests for the example data operations (100% line coverage)
-4. **Workflow Routes**: Integration tests for workflow API endpoints (100% line coverage)
-5. **Instagram Routes**: Integration tests for Instagram API endpoints (84.37% line coverage)
+3. **InstagramController**: Tests for webhook handling and error cases (20.05% line coverage)
+4. **exampleController**: Tests for the example data operations (100% line coverage)
+5. **Workflow Routes**: Integration tests for workflow API endpoints (100% line coverage)
+6. **Instagram Routes**: Integration tests for Instagram API endpoints (84.37% line coverage)
 
-Overall coverage: 33.88% of lines
+Overall coverage: 28.88% of lines
+
+## Key Bug Fixes
+
+The tests have helped identify and fix the following issues:
+
+1. **InstagramController**: Fixed a bug where the code was trying to access `username` property of an undefined object in the `get-comments` processor. The fix adds proper validation and error handling for missing data in webhook payloads.
 
 ## Adding New Tests
 
@@ -78,12 +85,13 @@ When adding new tests, follow these guidelines:
 
 The following areas need additional test coverage:
 
-1. **ScheduleAutomation**: Currently at 10.52% line coverage
-2. **Utility Functions**: The utility modules have very low coverage
+1. **InstagramController**: Currently at 20.05% line coverage - focus on webhook processing and automation execution
+2. **ScheduleAutomation**: Currently at 10.52% line coverage
+3. **Utility Functions**: The utility modules have very low coverage
    - PageUtils.js: 12.74%
    - geminiUtils.js: 18.18%
    - instagramUtils.js: 6.97%
-3. **Error Handling**: More tests for error conditions and edge cases
+4. **Error Handling**: More tests for error conditions and edge cases
 
 ## Best Practices
 

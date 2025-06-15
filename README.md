@@ -47,6 +47,7 @@ npm run dev
 - `POST /api/instagram/webhook` - Handle Instagram webhook events
 - `GET /api/instagram/settings` - Get Instagram settings
 - `POST /api/instagram/settings` - Update Instagram settings
+- `POST /api/instagram/exchange-token` - Exchange short-lived Instagram token for a long-lived token
 
 ## Testing
 
