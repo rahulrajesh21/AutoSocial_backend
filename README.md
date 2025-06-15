@@ -33,6 +33,40 @@ npm run dev
 - `GET /api/data/:table` - Get all items from a table
 - `POST /api/data/:table` - Create a new item in a table
 
+### Workflow API
+
+- `POST /api/Createworkflow` - Create a new workflow
+- `GET /api/GetAllWorkflows` - Get all workflows for the authenticated user
+- `GET /api/GetWorkflowById/:id` - Get a specific workflow by ID
+- `POST /api/UpdateAutomationStatus` - Update the status of an automation
+
+### Instagram API
+
+- `POST /api/instagram/save-token` - Save Instagram access token
+- `GET /api/instagram/status` - Check Instagram integration status
+- `POST /api/instagram/webhook` - Handle Instagram webhook events
+- `GET /api/instagram/settings` - Get Instagram settings
+- `POST /api/instagram/settings` - Update Instagram settings
+
+## Testing
+
+The project uses Jest for testing. The tests are organized into unit tests and integration tests.
+
+### Running Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run tests with coverage report
+npm run test:coverage
+
+# Run tests in watch mode
+npm run test:watch
+```
+
+For more information about the tests, see the [tests/README.md](./tests/README.md) file.
+
 ## Example Usage
 
 ### Fetching data from a table
