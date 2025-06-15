@@ -39,6 +39,13 @@ const automationHandlers = {
       VALUES (${automationId}, 'send-media', ${JSON.stringify(nodeData)})
       RETURNING *;
     `;
+  },
+  'helpDesk': async (automationId,nodeData) =>{
+    return await sql`
+     INSERT INTO action_automation (automation_id, action_type, action_data)
+      VALUES (${automationId}, 'helpDesk', ${JSON.stringify(nodeData)})
+      RETURNING *;
+    `
   }
 };
 
@@ -49,13 +56,15 @@ const processAutomationNodes = async (automationId, flowData) => {
   // Find all trigger nodes (nodes that start the automation)
   const triggerNodes = flowData.nodes.filter(node => {
     const selectedOption = node.data?.selectedOption;
-    return selectedOption && automationHandlers[selectedOption];
+    // Check for nodes with selectedOption or type 'helpDesk'
+    return (selectedOption && automationHandlers[selectedOption]) || 
+           (node.type === 'helpDesk' && automationHandlers['helpDesk']);
   });
 
   // Process each trigger node
   for (const node of triggerNodes) {
-    const { selectedOption } = node.data;
-    const handler = automationHandlers[selectedOption];
+    const handlerKey = node.data?.selectedOption || (node.type === 'helpDesk' ? 'helpDesk' : null);
+    const handler = handlerKey ? automationHandlers[handlerKey] : null;
     
     if (handler) {
       try {
@@ -63,15 +72,15 @@ const processAutomationNodes = async (automationId, flowData) => {
         if (result) {
           results.push({
             nodeId: node.id,
-            type: selectedOption,
+            type: handlerKey,
             result: result[0] || result
           });
         }
       } catch (error) {
-        console.error(`Error processing ${selectedOption} node:`, error);
+        console.error(`Error processing ${handlerKey} node:`, error);
         results.push({
           nodeId: node.id,
-          type: selectedOption,
+          type: handlerKey,
           error: error.message
         });
       }
@@ -115,6 +124,12 @@ const analyzeFlowStructure = (flowData) => {
         type: 'gemini',
         data: data
       });
+    }else if (type === 'helpDesk'){
+      analysis.processors.push({
+        id: node.id,
+        type: "helpDesk",
+        data: data
+      })
     }
   });
 

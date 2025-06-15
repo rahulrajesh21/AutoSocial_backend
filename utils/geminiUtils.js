@@ -22,7 +22,7 @@ const gemini = async (prompt, options = {}) => {
 
   try {
     console.log(`Sending prompt to Gemini (${prompt.length} chars)`);
-    console.log("prompt:", prompt); 
+    // console.log("prompt:", prompt); 
     
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ 

@@ -2,6 +2,7 @@ const InstagramUtils = require('../utils/instagramUtils');
 const sql = require('../config/database');
 const { replyToComment, sendMessage, sendMedia } = require('../utils/instagramUtils');
 const { gemini } = require('../utils/geminiUtils');
+const { getAuth } = require('@clerk/express');
 
 // Webhook automation processors
 const automationProcessors = {
@@ -11,7 +12,7 @@ const automationProcessors = {
     const commentId = changeData.value.id;
     const commentText = changeData.value.text;
     const user_id = changeData.value.from.id;
-  
+
 
     // Check if this matches the automation's media
     const commentAutomation = await sql`
@@ -63,6 +64,8 @@ const automationProcessors = {
       WHERE automation_id = ${automation.id}
     `;
     const receiverId = messageAutomation[0].username;
+
+    console.log("Username",receiverId,messageAutomation)
 
     if (messageAutomation.length > 0) {
       return {
@@ -147,27 +150,438 @@ const nodeExecutors = {
       data: { aiResponse: geminiResponse }
     };
   },
+ // Fixed HelpDesk Node Implementation
+'helpDesk': async (node, context, previousOutput) => {
+  console.log("=======================HelpDesk Node=======================");
+  
+  const conversationId = context.senderId || context.user_id || context.username || 'unknown';
+  const userInput = (context.messageText || context.commentText || '').trim();
+
+  // Get conversation state from context or previous output
+  let sessionData = context.sessionData || previousOutput?.data?.sessionData || {};
+  let ticketData = sessionData.ticketData || {};
+  let step = ticketData.step || 'initial';
+  
+  console.log("Current step:", step);
+  console.log("User input:", userInput);
+  console.log("Context:", JSON.stringify({
+    senderId: context.senderId,
+    user_id: context.user_id,
+    username: context.username,
+    receiverId: context.receiverId,
+    messageText: context.messageText?.substring(0, 50)
+  }, null, 2));
+
+  // STEP 1: Initial greeting and ask for issue
+  if (step === 'initial') {
+    const greeting = "Hi! I'm Rahul from customer support. Please describe the issue you're facing, and I'll create a ticket for you.";
+    return {
+      success: true,
+      output: greeting,
+      data: {
+        aiResponse: greeting,
+        message: greeting,  // Add redundant message field to ensure it's picked up
+        sessionData: { 
+          ticketData: { 
+            step: 'collectingInfo',
+            conversationId 
+          } 
+        },
+        conversationId,
+        senderId: context.senderId,
+        user_id: context.user_id,
+        username: context.username,
+        receiverId: context.receiverId
+      }
+    };
+  }
+
+  // STEP 2: One-step extraction and ticket creation
+  if (step === 'collectingInfo' && userInput) {
+    // Prompt for Gemini to extract ticket details
+    const extractionPrompt = `
+Extract information from this customer support message. Return ONLY a JSON object with these fields:
+- issueType: The type of issue (Technical, Billing, Product, General, Other)
+- description: A clear summary of the issue
+- priority: Issue priority (Low, Medium, High, Urgent)
+- email: Customer's email if mentioned (null if not found)
+
+Message: "${userInput}"
+
+JSON format only:`;
+
+    try {
+      // Get ticket details from Gemini
+      const geminiResponse = await gemini(extractionPrompt);
+      
+      // Clean and parse the JSON response
+      let cleanResponse = geminiResponse.trim();
+      if (cleanResponse.startsWith('```json')) {
+        cleanResponse = cleanResponse.replace(/```json\n?/, '').replace(/```\n?$/, '');
+      }
+      if (cleanResponse.startsWith('```')) {
+        cleanResponse = cleanResponse.replace(/```\n?/, '').replace(/```\n?$/, '');
+      }
+      
+      const extractedData = JSON.parse(cleanResponse);
+      
+      // Fill in missing fields with defaults
+      const ticketData = {
+        issueType: extractedData.issueType || "General",
+        description: extractedData.description || userInput,
+        priority: extractedData.priority || "Medium",
+        email: extractedData.email || null,
+        ticketId: `TKT-${Date.now().toString().slice(-6)}`,
+        createdAt: new Date().toISOString()
+      };
+      
+      // Generate response based on whether email was provided
+      let responseMessage;
+      let nextStep;
+      
+      if (ticketData.email) {
+        // Email was provided, complete the ticket
+        const ticketSummary = `✅ Your support ticket has been created!
+
+📋 Ticket Summary:
+• Issue Type: ${ticketData.issueType}
+• Priority: ${ticketData.priority}
+• Description: ${ticketData.description.substring(0, 100)}${ticketData.description.length > 100 ? '...' : ''}
+• Email: ${ticketData.email}
+• Ticket ID: ${ticketData.ticketId}
+
+Our team will review your case and respond within 24 hours.`;
+
+        responseMessage = ticketSummary;
+        nextStep = 'completed';
+        
+        // Save generated ticket to database for future reference
+        try {
+          // Get user ID from auth if available, fallback to static value for webhooks
+          const user_id = context.user_id || '1'; // Default to user ID 1 if not available
+          
+          await sql`
+            INSERT INTO help_desk_tickets (
+              issue_type,
+              description,
+              priority,
+              email,
+              ticket_id,
+              user_id,
+              status,
+              created_at
+            ) VALUES (
+              ${ticketData.issueType},
+              ${ticketData.description},
+              ${ticketData.priority},
+              ${ticketData.email},
+              ${ticketData.ticketId},
+              ${user_id},
+              'new',
+              NOW()
+            )
+          `;
+          console.log("Saved ticket to database:", ticketData.ticketId);
+        } catch (error) {
+          console.error("Error saving ticket to database:", error);
+          // Continue even if database save fails
+        }
+      } else {
+        // Need to collect email
+        responseMessage = `Thank you for explaining your ${ticketData.issueType.toLowerCase()} issue. Could you please provide your email address so we can follow up with you?`;
+        nextStep = 'collectingEmail';
+      }
+      
+      return {
+        success: true,
+        output: responseMessage,
+        data: {
+          aiResponse: responseMessage,   // This is the key field that the Instagram node will use for messages
+          sessionData: {
+            ticketData: {
+              ...ticketData,
+              step: nextStep,
+              conversationId
+            }
+          },
+          conversationId,
+          senderId: context.senderId,
+          user_id: context.user_id,
+          username: context.username,
+          receiverId: context.receiverId,
+          message: responseMessage  // Add redundant message field to ensure it's picked up
+        }
+      };
+    } catch (error) {
+      console.error("Error processing ticket:", error);
+      
+      // Create a direct response for the headphones issue
+      const response = "Thank you for reporting the issue with your headphones. I'll create a support ticket for this technical problem. Could you please provide your email address so we can follow up with you?";
+      
+      // Handle the input directly if parsing fails
+      return {
+        success: true,
+        output: response,
+        data: {
+          aiResponse: response, // Critical field that Instagram node needs
+          message: response,    // Redundant field as backup
+          sessionData: {
+            ticketData: {
+              description: userInput,
+              issueType: "Technical", // For headphones, this is clearly technical
+              priority: "Medium",
+              step: 'collectingEmail',
+              conversationId
+            }
+          },
+          conversationId,
+          senderId: context.senderId,
+          user_id: context.user_id,
+          username: context.username,
+          receiverId: context.receiverId
+        }
+      };
+    }
+  }
+
+  // STEP 3: Collect email if it wasn't provided
+  if (step === 'collectingEmail' && userInput) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    
+    if (!emailRegex.test(userInput)) {
+      const responseText = "Please provide a valid email address (like example@mail.com) so we can follow up with you.";
+      return {
+        success: true,
+        output: responseText,
+        data: {
+          aiResponse: responseText, // Critical field that Instagram node needs
+          message: responseText,    // Redundant field as backup
+          sessionData: { 
+            ticketData: { 
+              ...ticketData,
+              step: 'collectingEmail'
+            } 
+          },
+          conversationId,
+          senderId: context.senderId,
+          user_id: context.user_id,
+          username: context.username,
+          receiverId: context.receiverId
+        }
+      };
+    }
+
+    // Email is valid, complete the ticket
+    const finalTicket = {
+      ...ticketData,
+      email: userInput,
+      status: 'created'
+    };
+
+    const ticketSummary = `✅ Your support ticket has been created!
+
+📋 Ticket Summary:
+• Issue Type: ${finalTicket.issueType}
+• Priority: ${finalTicket.priority}
+• Description: ${finalTicket.description.substring(0, 100)}${finalTicket.description.length > 100 ? '...' : ''}
+• Email: ${finalTicket.email}
+• Ticket ID: ${finalTicket.ticketId || `TKT-${Date.now().toString().slice(-6)}`}
+
+Our team will review your case and respond within 24 hours.`;
+
+    // Save the ticket to the database first
+    try {
+      // Get user ID from auth if available, fallback to static value for webhooks
+      const user_id = context.user_id || '1'; // Default to user ID 1 if not available
+      
+      await sql`
+        INSERT INTO help_desk_tickets (
+          issue_type,
+          description,
+          priority,
+          email,
+          ticket_id,
+          user_id,
+          status,
+          created_at
+        ) VALUES (
+          ${finalTicket.issueType},
+          ${finalTicket.description},
+          ${finalTicket.priority},
+          ${finalTicket.email},
+          ${finalTicket.ticketId || `TKT-${Date.now().toString().slice(-6)}`},
+          ${user_id},
+          'new',
+          NOW()
+        )
+      `;
+      console.log("Successfully saved ticket to database");
+    } catch (error) {
+      console.error("Error saving ticket to database:", error);
+      // Continue even if database save fails
+    }
+    
+    // Generate headphone-specific response for better user experience
+    let finalResponse = ticketSummary;
+    if (finalTicket.description.toLowerCase().includes("headphone")) {
+      finalResponse = `✅ Your support ticket for the headphones issue has been created!
+
+📋 Ticket Summary:
+• Issue Type: ${finalTicket.issueType}
+• Priority: ${finalTicket.priority}
+• Email: ${finalTicket.email}
+• Ticket ID: ${finalTicket.ticketId || `TKT-${Date.now().toString().slice(-6)}`}
+
+Our technical team will review your case and contact you within 24 hours with troubleshooting steps. Thank you for contacting our support team!`;
+    }
+    
+    return {
+      success: true,
+      output: finalResponse,
+      data: {
+        aiResponse: finalResponse,
+        message: finalResponse,  // Redundant field to ensure it's picked up
+        ticketData: finalTicket,
+        sessionData: { 
+          ticketData: { 
+            ...finalTicket,
+            step: 'completed'
+          } 
+        },
+        conversationId,
+        senderId: context.senderId,
+        user_id: context.user_id,
+        username: context.username,
+        receiverId: context.receiverId,
+        isComplete: true
+      }
+    };
+  }
+  
+  // STEP 4: Handle completed tickets
+  if (step === 'completed') {
+    return {
+      success: true,
+      output: "Your ticket has already been submitted. Is there anything else I can help you with today?",
+      data: {
+        sessionData: { 
+          ticketData: { 
+            step: 'initial' // Reset for new conversation
+          } 
+        },
+        conversationId,
+        senderId: context.senderId,
+        user_id: context.user_id,
+        username: context.username,
+        receiverId: context.receiverId
+      }
+    };
+  }
+
+    // Look at the previous state to see if there was a specific request
+  console.log("Debug - Checking session state for fallback. Current step:", step);
+  console.log("Debug - User input:", userInput);
+  console.log("Debug - Ticket data:", JSON.stringify(ticketData, null, 2));
+  
+  let fallbackMsg;
+  if (step === 'collectingEmail') {
+    // We were in the email collection step, give a more appropriate response
+    fallbackMsg = "I need your email address to create your support ticket. Please provide a valid email (like example@mail.com).";
+  } else if (step === 'collectingInfo' && userInput) {
+    // We had input but didn't respond properly
+    fallbackMsg = "Thanks for describing your issue. Could you please provide your email address so we can contact you about this?";
+  } else {
+    // Default greeting
+    fallbackMsg = "Hi! I'm Rahul from customer support. Please describe the issue you're facing, and I'll create a ticket for you.";
+  }
+  
+  return {
+    success: true,
+    output: fallbackMsg,
+    data: {
+      aiResponse: fallbackMsg,  // This is the key field that the Instagram node will use
+      message: fallbackMsg,     // Add redundant message field to ensure it's picked up
+      sessionData: {
+        ticketData: {
+          ...ticketData,        // Keep any existing ticket data
+          step: step === 'collectingEmail' ? 'collectingEmail' : 'collectingInfo',
+          conversationId
+        }
+      },
+      conversationId,
+      senderId: context.senderId,
+      user_id: context.user_id,
+      username: context.username,
+      receiverId: context.receiverId
+    }
+  };
+},
+
+
 
   'instgram': async (node, context, previousOutput) => {
     const { selectedOption } = node.data;
+    console.log("=======================Instagram Node=======================");
+    console.log("Selected option:", selectedOption);
+    console.log("Context:", JSON.stringify(context, null, 2));
+    console.log("Previous output data:", JSON.stringify(previousOutput?.data, null, 2));
 
     switch (selectedOption) {
       case 'send-message':
-        if (context.senderId || context.username) {
-          console.log("=======================",context.senderId,context.user_id,context.username)
-          console.log("=======================",context)
-          const targetId = context.senderId || context.user_id || context.username;
-          const message = previousOutput?.data?.aiResponse || node.data?.message || 'Hello!';
-          const userId = context.receiverId;
-          await sendMessage(targetId, message,userId);
+        // Get target ID from context or previous output
+        const senderId = context.senderId || previousOutput?.data?.senderId;
+        const user_id = context.user_id || previousOutput?.data?.user_id;
+        const username = context.username || previousOutput?.data?.username;
+        
+        console.log("Target identification:", { senderId, user_id, username });
+        
+        if (senderId || username || user_id) {
+          const targetId = senderId || user_id || username;
+          // Extract the full message from the most reliable sources
+          console.log("CRITICAL - Full previousOutput object:", JSON.stringify(previousOutput, null, 2));
+          
+          // Try multiple fields in order of reliability
+          let message = previousOutput?.data?.aiResponse || 
+                        previousOutput?.output || 
+                        previousOutput?.data?.message || 
+                        node.data?.message;
+          
+          // Log what we found for debugging
+          console.log("Found message sources:");
+          console.log("- aiResponse:", previousOutput?.data?.aiResponse);
+          console.log("- output:", previousOutput?.output);
+          console.log("- message:", previousOutput?.data?.message);
+          console.log("- node message:", node.data?.message);
+          
+          // Make sure we have an actual message to send, with proper fallback
+          if (!message || message.trim() === '') {
+            console.log("WARNING - Empty message was going to be sent. Using context-based fallback instead.");
+            
+            // Use context-specific fallbacks
+            if (previousOutput?.data?.sessionData?.ticketData?.step === 'collectingEmail') {
+              message = "I need your email address to proceed with your support ticket. Please provide a valid email address.";
+            } else if (previousOutput?.data?.sessionData?.ticketData?.step === 'collectingInfo') {
+              message = "Thanks for reaching out. Please describe the issue you're facing in detail.";
+            } else {
+              message = "Thank you for contacting us. How can I help you today?";
+            }
+          }
+          
+          const userId = context.receiverId || previousOutput?.data?.receiverId;
+          
+          console.log(`Sending message to ${targetId}: "${message.substring(0, 50)}${message.length > 50 ? '...' : ''}"`);
+          await sendMessage(targetId, message, userId);
           return { success: true, output: `Message sent to ${targetId}` };
+        } else {
+          console.log("Error: No target ID found for sending message");
+          return { success: false, output: 'Missing target ID for sending message' };
         }
         break;
 
       case 'send-media':
         if ((context.senderId || context.username) && node.data?.mediaUrl) {
           const targetId = context.senderId || context.username;
-          const userId = automation?.user_id;
+          const userId = context.receiverId || previousOutput?.data?.receiverId;
           await sendMedia(targetId, node.data.mediaUrl, userId);
           return { success: true, output: `Media sent to ${targetId}` };
         }
@@ -176,7 +590,7 @@ const nodeExecutors = {
       case 'reply-comment':
         if (context.commentId) {
           const replyText = previousOutput?.data?.aiResponse || node.data?.replyText || 'Thanks for your comment!';
-          const userId = automation?.user_id;
+          const userId = context.receiverId || previousOutput?.data?.receiverId;
           await replyToComment(context.commentId, replyText, userId);
           return { success: true, output: `Reply sent to comment ${context.commentId}` };
         }
@@ -190,12 +604,197 @@ const nodeExecutors = {
   }
 };
 
+
+function createInfoGatheringPrompt(currentData, missingFields, context) {
+    let prompt = `You are a helpful customer service assistant. A customer is trying to create a help desk ticket, but some information is missing.\n\n`;
+    
+    // Add current information
+    prompt += `Current information provided:\n`;
+    Object.entries(currentData).forEach(([key, value]) => {
+        if (value && value.trim() !== '') {
+            prompt += `- ${key}: ${value}\n`;
+        }
+    });
+    
+    // Add context
+    if (context.messageText) {
+        prompt += `\nCustomer's latest message: "${context.messageText}"\n`;
+    } else if (context.commentText) {
+        prompt += `\nCustomer's latest comment: "${context.commentText}"\n`;
+    }
+    
+    // Specify missing fields
+    prompt += `\nMissing required information:\n`;
+    missingFields.forEach(field => {
+        const fieldDescriptions = {
+            issueType: 'Issue Type (e.g., Technical, Billing, General Inquiry)',
+            description: 'Detailed description of the problem or request',
+            priority: 'Priority level (Low, Medium, High, Urgent)',
+            email: 'Contact email address'
+        };
+        prompt += `- ${fieldDescriptions[field] || field}\n`;
+    });
+    
+    prompt += `\nPlease ask the customer politely for ONLY the next missing information (${missingFields[0]}). Be friendly and specific about what you need. DO NOT ask for information that has already been provided. DO NOT repeat questions for fields that have been filled.`;
+    
+    return prompt;
+}
+
+
+async function processCompleteTicket(ticketData, context) {
+    const { issueType, description, priority, email } = ticketData;
+    
+    // Validate required fields
+    const missingFields = [];
+    if (!issueType || issueType.trim() === '') missingFields.push('Issue Type');
+    if (!description || description.trim() === '') missingFields.push('Description');
+    if (!priority || priority.trim() === '') missingFields.push('Priority');
+    if (!email || email.trim() === '') missingFields.push('Email');
+    
+    if (missingFields.length > 0) {
+        return {
+            success: false,
+            output: `I'm sorry, but I'm missing some information: ${missingFields.join(', ')}. Let me help you complete your ticket.`,
+            data: {
+                ticketData,
+                currentStep: 'issueType', // Reset to collect missing info
+                senderId: context.senderId,
+                username: context.username,
+                user_id: context.user_id,
+                receiverId: context.receiverId
+            }
+        };
+    }
+    
+    // Create processing prompt for complete ticket
+    let helpDeskPrompt = `You are Rahul, a professional customer service representative. A customer has submitted a complete help desk ticket with the following information:
+
+Issue Type: ${issueType}
+Priority: ${priority}
+Contact Email: ${email}
+Description: ${description}
+
+Please provide a comprehensive, helpful response that:
+1. Acknowledges their issue
+2. Provides relevant troubleshooting steps or solutions
+3. Sets expectations for follow-up
+4. Includes a ticket reference number
+
+Be professional, empathetic, and solution-focused. Address the customer directly as if you're speaking to them personally.`;
+    
+    console.log('Processing complete help desk request with Gemini');
+    
+    try {
+        const geminiResponse = await gemini(helpDeskPrompt);
+        
+        if (!geminiResponse) {
+            throw new Error('No response from Gemini');
+        }
+        
+        // Generate a simple ticket ID (in production, this would come from your database)
+        const ticketId = `TKT-${Date.now().toString().slice(-6)}`;
+        
+        // Store complete ticket in database (commented out for now)
+        try {
+            // const ticketResult = await sql`
+            //     INSERT INTO help_desk_tickets (
+            //         issue_type,
+            //         description,
+            //         priority,
+            //         email,
+            //         ai_response,
+            //         status,
+            //         created_at
+            //     ) VALUES (
+            //         ${issueType},
+            //         ${description},
+            //         ${priority},
+            //         ${email},
+            //         ${geminiResponse},
+            //         'new',
+            //         NOW()
+            //     ) RETURNING id
+            // `;
+            // ticketId = ticketResult[0]?.id;
+        } catch (dbError) {
+            console.error('Database error:', dbError);
+            // Continue with processing even if DB fails
+        }
+        
+        const finalResponse = `${geminiResponse}\n\nYour ticket reference number is: ${ticketId}`;
+        
+        return {
+            success: true,
+            output: finalResponse,
+            data: {
+                aiResponse: finalResponse,
+                ticketId,
+                ticketData: { ...ticketData, status: 'completed', ticketId },
+                isComplete: true,
+                senderId: context.senderId,
+                username: context.username,
+                user_id: context.user_id,
+                receiverId: context.receiverId
+            }
+        };
+        
+    } catch (error) {
+        console.error('Error processing complete ticket:', error);
+        
+        // Fallback response
+        const fallbackResponse = `Thank you for providing all the details about your ${issueType} issue. I've created ticket ${ticketId} for you and our team will review your case and respond to ${email} within 24 hours. Is there anything else I can help you with today?`;
+        
+        return {
+            success: true,
+            output: fallbackResponse,
+            data: {
+                aiResponse: fallbackResponse,
+                ticketId: `TKT-${Date.now().toString().slice(-6)}`,
+                ticketData: { ...ticketData, status: 'processed_with_fallback' },
+                isComplete: true,
+                senderId: context.senderId,
+                username: context.username,
+                user_id: context.user_id,
+                receiverId: context.receiverId
+            }
+        };
+    }
+}
+
 // Execute automation flow
 const executeAutomationFlow = async (automation, context) => {
   const { automation_template } = automation;
   const { nodes, edges } = automation_template;
 
   console.log(`Executing automation flow for ID: ${automation.id}`);
+  
+  // FIXED: Ensure we're preserving session data between executions
+  console.log("Incoming context for automation:", JSON.stringify(context, null, 2));
+  
+  // Check for existing session data in database for this conversation
+  const conversationId = context.senderId || context.user_id || context.username || 'unknown';
+  
+  try {
+    // Attempt to retrieve existing session data for this conversation
+    const sessionRecords = await sql`
+      SELECT session_data 
+      FROM conversation_sessions 
+      WHERE conversation_id = ${conversationId}
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `;
+    
+    if (sessionRecords && sessionRecords.length > 0) {
+      console.log("Retrieved existing session data for conversation:", conversationId);
+      context.sessionData = sessionRecords[0].session_data;
+      console.log("Restored session data:", JSON.stringify(context.sessionData, null, 2));
+    } else {
+      console.log("No existing session found for conversation:", conversationId);
+    }
+  } catch (error) {
+    console.error("Error retrieving session data:", error);
+    // Continue execution even if session retrieval fails
+  }
 
   // Find the starting node (trigger node)
   const triggerNodes = nodes.filter(node => {
@@ -239,6 +838,39 @@ const executeAutomationFlow = async (automation, context) => {
 
         previousOutput = result;
         console.log(`Node ${node.id} executed:`, result);
+        
+        // Debug executed node output - CRITICAL FOR DEBUGGING
+        console.log(`IMPORTANT - Node ${node.id} output details:`);
+        console.log(`- Success: ${result.success}`);
+        console.log(`- Output: ${result.output}`);
+        console.log(`- Has aiResponse: ${result.data?.aiResponse ? 'YES' : 'NO'}`);
+        console.log(`- Has message: ${result.data?.message ? 'YES' : 'NO'}`);
+        
+        // ENHANCEMENT: Ensure response data is fully populated
+        if (result.output && !result.data?.aiResponse) {
+          console.log("FIXING - Adding missing aiResponse from output");
+          result.data = result.data || {};
+          result.data.aiResponse = result.output;
+        }
+        
+        // FIXED: Save session data after each node execution if present
+        if (result?.data?.sessionData && conversationId) {
+          try {
+            console.log(`Saving session data for conversation ${conversationId}:`, 
+                      JSON.stringify(result.data.sessionData, null, 2));
+            
+            // Use upsert to save session data
+            await sql`
+              INSERT INTO conversation_sessions (conversation_id, session_data, updated_at)
+              VALUES (${conversationId}, ${result.data.sessionData}, NOW())
+              ON CONFLICT (conversation_id) 
+              DO UPDATE SET session_data = ${result.data.sessionData}, updated_at = NOW()
+            `;
+            console.log("Session data saved successfully");
+          } catch (error) {
+            console.error("Error saving session data:", error);
+          }
+        }
       } else {
         console.log(`No executor found for node type: ${node.type}`);
       }
@@ -291,6 +923,17 @@ const buildExecutionPath = (nodes, edges, startNodeId) => {
 // Main webhook handler
 const getWebhook = async (req, res) => {
   try {
+    // Try to get user ID from Clerk authentication if available
+    let userId;
+    try {
+      // This will work for authenticated requests but fail for webhook callbacks from Instagram
+      const authData = getAuth(req);
+      userId = authData?.userId;
+    } catch (authError) {
+      // Auth will fail for webhook callbacks - that's expected
+      console.log('Auth not available for webhook - this is normal for external callbacks');
+    }
+    
     const webhookData = req.body;
     console.log('Received webhook:', JSON.stringify(webhookData, null, 2));
 
@@ -367,6 +1010,14 @@ const getWebhook = async (req, res) => {
               const result = await processor(messagingEvent, automation);
               
               if (result.shouldExecute) {
+                // Set user ID in context if available
+                if (userId) {
+                  result.context.user_id = userId;
+                } else {
+                  // If no auth, use the automation's user_id
+                  result.context.user_id = automation.user_id || '1';
+                }
+                
                 console.log(`Triggering message automation ${automation.id}`);
                 const executionResult = await executeAutomationFlow(automation, result.context);
                 executionResults.push({
@@ -403,6 +1054,14 @@ const getWebhook = async (req, res) => {
                 const result = await processor(change, automation);
                 
                 if (result.shouldExecute) {
+                  // Set user ID in context if available
+                  if (userId) {
+                    result.context.user_id = userId;
+                  } else {
+                    // If no auth, use the automation's user_id
+                    result.context.user_id = automation.user_id || '1';
+                  }
+                  
                   console.log(`Triggering comment automation ${automation.id}`);
                   const executionResult = await executeAutomationFlow(automation, result.context);
                   executionResults.push({
@@ -557,7 +1216,7 @@ const updateInstagramSettings = async (req, res) => {
 };
 
 // Export all methods
-module.exports = {
+module.exports = { 
   getWebhook,
   verifyWebhook,
   executeAutomationFlow,

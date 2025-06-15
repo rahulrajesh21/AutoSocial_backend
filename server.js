@@ -11,7 +11,9 @@ const port = process.env.PORT || 3000;
 const workflowRouter = require('./routes/workflow');
 const exampleRouter = require('./routes/example');
 const instagramRouter = require('./routes/instagram');
+const helpDeskRouter = require('./routes/helpdesk');
 const { getWebhook } = require('./controllers/InstagramController');
+const { runMigrations } = require('./scripts/run_migrations');
 
 app.use(clerkMiddleware());
 
@@ -41,6 +43,7 @@ app.use('/api/CreateScheduleAutomation', upload.single('media'));
 app.use('/api', workflowRouter);
 app.use('/api/data', exampleRouter);
 app.use('/api/instagram', instagramRouter);
+app.use('/api/helpdesk', helpDeskRouter);
 app.use('/uploads', express.static('uploads'));
 
 // ✅ Root route
@@ -137,6 +140,16 @@ app.post('/webhooks', async (req, res) => {
     });
   }
 });
+
+// Run database migrations on startup
+(async () => {
+  try {
+    await runMigrations();
+    console.log('Database migrations completed successfully');
+  } catch (error) {
+    console.error('Error running migrations:', error);
+  }
+})();
 
 // ✅ Start server
 app.listen(port, () => {
