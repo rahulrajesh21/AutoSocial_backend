@@ -9,33 +9,23 @@ const { gemini } = require('../utils/geminiUtils');
  */
 const getTickets = async (req, res) => {
   try {
-    const { status, limit = 50, offset = 0 } = req.query;
+    const { userId } = getAuth(req);
     
-    let query = sql`
-      SELECT * FROM help_desk_tickets 
-      ORDER BY created_at DESC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
-    
-    if (status) {
-      query = sql`
-        SELECT * FROM help_desk_tickets 
-        WHERE status = ${status}
-        ORDER BY created_at DESC
-        LIMIT ${limit} OFFSET ${offset}
-      `;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
-    
-    const tickets = await query;
-    
-    res.status(200).json({
-      success: true,
-      count: tickets.length,
-      data: tickets
-    });
+
+    // Get all tickets for this user
+    const tickets = await sql`
+      SELECT * FROM help_desk_tickets 
+      WHERE user_id = ${userId}
+      ORDER BY created_at DESC
+    `;
+
+    return res.json({ success: true, tickets });
   } catch (error) {
     console.error('Error fetching help desk tickets:', error);
-    res.status(500).json({ error: 'Failed to fetch help desk tickets' });
+    return res.status(500).json({ error: 'Failed to fetch tickets' });
   }
 };
 
@@ -44,26 +34,28 @@ const getTickets = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-const getTicket = async (req, res) => {
+const getTicketById = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { userId } = getAuth(req);
+    const { ticketId } = req.params;
     
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
     const ticket = await sql`
       SELECT * FROM help_desk_tickets 
-      WHERE id = ${id}
+      WHERE ticket_id = ${ticketId} AND user_id = ${userId}
     `;
-    
+
     if (ticket.length === 0) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
-    
-    res.status(200).json({
-      success: true,
-      data: ticket[0]
-    });
+
+    return res.json({ success: true, ticket: ticket[0] });
   } catch (error) {
-    console.error('Error fetching help desk ticket:', error);
-    res.status(500).json({ error: 'Failed to fetch help desk ticket' });
+    console.error('Error fetching ticket details:', error);
+    return res.status(500).json({ error: 'Failed to fetch ticket details' });
   }
 };
 
@@ -74,52 +66,50 @@ const getTicket = async (req, res) => {
  */
 const createTicket = async (req, res) => {
   try {
-    const { issueType, description, priority, email } = req.body;
+    const { userId } = getAuth(req);
+    const { issue_type, description, priority, email } = req.body;
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
     
     if (!description) {
       return res.status(400).json({ error: 'Description is required' });
     }
     
-    // Process with Gemini
-    let helpDeskPrompt = `Process the following help desk ticket:\n\n`;
+    // Generate a unique ticket ID
+    const ticketId = `TKT-${Date.now().toString().slice(-6)}`;
     
-    if (issueType) helpDeskPrompt += `Issue Type: ${issueType}\n`;
-    if (priority) helpDeskPrompt += `Priority: ${priority}\n`;
-    if (email) helpDeskPrompt += `Contact Email: ${email}\n`;
-    if (description) helpDeskPrompt += `Description: ${description}\n`;
-    
-    helpDeskPrompt += `\nPlease analyze this help desk ticket and provide a suggested response.`;
-    
-    // Call Gemini to process the help desk request
-    const aiResponse = await gemini(helpDeskPrompt);
-    
+    // Insert the ticket into database
     const ticket = await sql`
       INSERT INTO help_desk_tickets (
+        ticket_id,
+        user_id,
         issue_type, 
         description, 
         priority, 
         email, 
-        ai_response, 
         status,
         created_at
       ) VALUES (
-        ${issueType || 'General'}, 
+        ${ticketId},
+        ${userId}, 
+        ${issue_type || 'General'}, 
         ${description}, 
         ${priority || 'Medium'}, 
         ${email || null}, 
-        ${aiResponse || null},
         'new',
         NOW()
       ) RETURNING *
     `;
     
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      data: ticket[0]
+      ticket: ticket[0]
     });
   } catch (error) {
     console.error('Error creating help desk ticket:', error);
-    res.status(500).json({ error: 'Failed to create help desk ticket' });
+    return res.status(500).json({ error: 'Failed to create help desk ticket' });
   }
 };
 
@@ -130,39 +120,133 @@ const createTicket = async (req, res) => {
  */
 const updateTicket = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { status } = req.body;
+    const { userId } = getAuth(req);
+    const { ticketId } = req.params;
+    const { status, assignee_id, resolution_notes } = req.body;
     
-    if (!status) {
-      return res.status(400).json({ error: 'Status is required' });
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
-    
-    const ticket = await sql`
-      UPDATE help_desk_tickets
-      SET 
-        status = ${status},
-        updated_at = NOW()
-      WHERE id = ${id}
-      RETURNING *
+
+    // Check if ticket exists and belongs to user
+    const existingTicket = await sql`
+      SELECT * FROM help_desk_tickets 
+      WHERE ticket_id = ${ticketId} AND user_id = ${userId}
     `;
-    
-    if (ticket.length === 0) {
+
+    if (existingTicket.length === 0) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
+
+    // Update based on which fields were provided
+    let updatedTicket;
     
-    res.status(200).json({
-      success: true,
-      data: ticket[0]
+    // Add resolved_at timestamp if status is 'resolved'
+    if (status === 'resolved') {
+      updatedTicket = await sql`
+        UPDATE help_desk_tickets
+        SET status = ${status}, 
+            resolved_at = NOW(),
+            updated_at = NOW()
+        WHERE ticket_id = ${ticketId} AND user_id = ${userId}
+        RETURNING *
+      `;
+    } 
+    else if (status) {
+      updatedTicket = await sql`
+        UPDATE help_desk_tickets
+        SET status = ${status}, 
+            updated_at = NOW()
+        WHERE ticket_id = ${ticketId} AND user_id = ${userId}
+        RETURNING *
+      `;
+    }
+    
+    if (assignee_id) {
+      updatedTicket = await sql`
+        UPDATE help_desk_tickets
+        SET assignee_id = ${assignee_id}, 
+            updated_at = NOW()
+        WHERE ticket_id = ${ticketId} AND user_id = ${userId}
+        RETURNING *
+      `;
+    }
+    
+    if (resolution_notes) {
+      updatedTicket = await sql`
+        UPDATE help_desk_tickets
+        SET resolution_notes = ${resolution_notes}, 
+            updated_at = NOW()
+        WHERE ticket_id = ${ticketId} AND user_id = ${userId}
+        RETURNING *
+      `;
+    }
+
+    // If no specific fields were updated, just update the timestamp
+    if (!updatedTicket) {
+      updatedTicket = await sql`
+        UPDATE help_desk_tickets
+        SET updated_at = NOW()
+        WHERE ticket_id = ${ticketId} AND user_id = ${userId}
+        RETURNING *
+      `;
+    }
+
+    return res.json({ 
+      success: true, 
+      message: 'Ticket updated successfully', 
+      ticket: updatedTicket[0] 
     });
   } catch (error) {
-    console.error('Error updating help desk ticket:', error);
-    res.status(500).json({ error: 'Failed to update help desk ticket' });
+    console.error('Error updating ticket:', error);
+    return res.status(500).json({ error: 'Failed to update ticket' });
+  }
+};
+
+/**
+ * Delete a help desk ticket
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const deleteTicket = async (req, res) => {
+  try {
+    const { userId } = getAuth(req);
+    const { ticketId } = req.params;
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Check if ticket exists and belongs to user
+    const existingTicket = await sql`
+      SELECT * FROM help_desk_tickets 
+      WHERE ticket_id = ${ticketId} AND user_id = ${userId}
+    `;
+
+    if (existingTicket.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    // Delete the ticket
+    await sql`
+      DELETE FROM help_desk_tickets 
+      WHERE ticket_id = ${ticketId} AND user_id = ${userId}
+    `;
+
+    return res.json({ 
+      success: true, 
+      message: 'Ticket deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting ticket:', error);
+    return res.status(500).json({ error: 'Failed to delete ticket' });
   }
 };
 
 module.exports = {
   getTickets,
-  getTicket,
+  getTicketById,
   createTicket,
-  updateTicket
+  updateTicket,
+  deleteTicket
 }; 

@@ -1,21 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const { getTickets, getTicket, createTicket, updateTicket } = require('../controllers/HelpDeskController');
+const { getTickets, getTicketById, updateTicket, deleteTicket, createTicket } = require('../controllers/HelpDeskController');
 
 
 // Apply authentication middleware to all routes
 
 
 // Get all tickets
-router.get('/', getTickets);
+router.get('/tickets', getTickets);
 
 // Get single ticket
-router.get('/:id', getTicket);
+router.get('/tickets/:ticketId', getTicketById);
 
 // Create new ticket
-router.post('/', createTicket);
+router.post('/tickets', createTicket);
 
 // Update ticket
-router.put('/:id', updateTicket);
+router.put('/tickets/:ticketId', updateTicket);
+
+// Delete ticket
+router.delete('/tickets/:ticketId', deleteTicket);
 
 module.exports = router; 
