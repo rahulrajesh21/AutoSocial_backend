@@ -3,6 +3,7 @@ const sql = require('../config/database');
 const { replyToComment, sendMessage, sendMedia } = require('../utils/instagramUtils');
 const { gemini } = require('../utils/geminiUtils');
 const axios = require('axios');
+const { getAuth } = require('@clerk/express');
 
 // Webhook automation processors
 const automationProcessors = {
@@ -34,6 +35,7 @@ const automationProcessors = {
             receiverId,
             mediaId,
             user_id,
+            automationUserId: automation.user_id,
             triggerType: 'comment'
           }
         };
@@ -77,6 +79,7 @@ const automationProcessors = {
           receiverId,
           messageId,
           timestamp,
+          automationUserId: automation.user_id,
           triggerType: 'message'
         }
       };
@@ -257,26 +260,35 @@ Our team will review your case and respond within 24 hours.`;
         
         // Save generated ticket to database for future reference
         try {
-          await sql`
-            INSERT INTO help_desk_tickets (
-              issue_type,
-              description,
-              priority,
-              email,
-              ticket_id,
-              status,
-              created_at
-            ) VALUES (
-              ${ticketData.issueType},
-              ${ticketData.description},
-              ${ticketData.priority},
-              ${ticketData.email},
-              ${ticketData.ticketId},
-              'new',
-              NOW()
-            )
-          `;
-          console.log("Saved ticket to database:", ticketData.ticketId);
+          const userId =  context.automationUserId; // Use automation's owner user_id as fallback
+          
+          // Skip insert if we don't have a valid user ID
+          if (userId) {
+            await sql`
+              INSERT INTO help_desk_tickets (
+                ticket_id,
+                user_id,
+                issue_type,
+                description,
+                priority,
+                email,
+                status,
+                created_at
+              ) VALUES (
+                ${ticketData.ticketId || `TKT-${Date.now().toString().slice(-6)}`},
+                ${userId},
+                ${ticketData.issueType},
+                ${ticketData.description},
+                ${ticketData.priority},
+                ${ticketData.email},
+                'new',
+                NOW()
+              )
+            `;
+            console.log("Successfully saved ticket to database");
+          } else {
+            console.log("Skipping ticket database insertion - no valid user_id available");
+          }
         } catch (error) {
           console.error("Error saving ticket to database:", error);
           // Continue even if database save fails
@@ -386,39 +398,55 @@ Our team will review your case and respond within 24 hours.`;
 
     // Save the ticket to the database first
     try {
-      await sql`
-        CREATE TABLE IF NOT EXISTS help_desk_tickets (
-          id SERIAL PRIMARY KEY,
-          issue_type TEXT,
-          description TEXT,
-          priority TEXT,
-          email TEXT,
-          ticket_id TEXT,
-          status TEXT,
-          created_at TIMESTAMP
-        )
-      `;
+      // await sql`
+      //   CREATE TABLE IF NOT EXISTS help_desk_tickets (
+      //     id SERIAL PRIMARY KEY,
+      //     ticket_id VARCHAR(20) NOT NULL,
+      //     user_id VARCHAR(255) NOT NULL,
+      //     issue_type VARCHAR(50) NOT NULL,
+      //     description TEXT NOT NULL,
+      //     priority VARCHAR(20) NOT NULL,
+      //     email VARCHAR(255) NOT NULL,
+      //     status VARCHAR(30) NOT NULL DEFAULT 'new',
+      //     assignee_id VARCHAR(255),
+      //     response_time TIMESTAMP,
+      //     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      //     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      //     resolved_at TIMESTAMP,
+      //     resolution_notes TEXT
+      //   )
+      // `;
       
-      await sql`
-        INSERT INTO help_desk_tickets (
-          issue_type,
-          description,
-          priority,
-          email,
-          ticket_id,
-          status,
-          created_at
-        ) VALUES (
-          ${finalTicket.issueType},
-          ${finalTicket.description},
-          ${finalTicket.priority},
-          ${finalTicket.email},
-          ${finalTicket.ticketId || `TKT-${Date.now().toString().slice(-6)}`},
-          'new',
-          NOW()
-        )
-      `;
-      console.log("Successfully saved ticket to database");
+      const userId = context.clerkUserId || context.senderId || context.automationUserId; // Use automation's owner user_id as fallback
+      console.log("userId", userId);
+      
+      // Skip insert if we don't have a valid user ID
+      if (userId) {
+        await sql`
+          INSERT INTO help_desk_tickets (
+            ticket_id,
+            user_id,
+            issue_type,
+            description,
+            priority,
+            email,
+            status,
+            created_at
+          ) VALUES (
+            ${finalTicket.ticketId || `TKT-${Date.now().toString().slice(-6)}`},
+            ${userId},
+            ${finalTicket.issueType},
+            ${finalTicket.description},
+            ${finalTicket.priority},
+            ${finalTicket.email},
+            'new',
+            NOW()
+          )
+        `;
+        console.log("Successfully saved ticket to database");
+      } else {
+        console.log("Skipping ticket database insertion - no valid user_id available");
+      }
     } catch (error) {
       console.error("Error saving ticket to database:", error);
       // Continue even if database save fails
@@ -525,9 +553,9 @@ Our technical team will review your case and contact you within 24 hours with tr
   'instgram': async (node, context, previousOutput) => {
     const { selectedOption } = node.data;
     console.log("=======================Instagram Node=======================");
-    console.log("Selected option:", selectedOption);
-    console.log("Context:", JSON.stringify(context, null, 2));
-    console.log("Previous output data:", JSON.stringify(previousOutput?.data, null, 2));
+    // console.log("Selected option:", selectedOption);
+    // console.log("Context:", JSON.stringify(context, null, 2));
+    // console.log("Previous output data:", JSON.stringify(previousOutput?.data, null, 2));
 
     switch (selectedOption) {
       case 'send-message':
@@ -699,22 +727,31 @@ Be professional, empathetic, and solution-focused. Address the customer directly
         
         // Store complete ticket in database (commented out for now)
         try {
+            // const userId = context.clerkUserId || context.senderId || context.automationUserId; // Use automation's owner user_id as fallback
+            // if (!userId) {
+            //   console.log("Skipping ticket database insertion - no valid user_id available");
+            //   return;
+            // }
             // const ticketResult = await sql`
             //     INSERT INTO help_desk_tickets (
+            //         ticket_id,
+            //         user_id,
             //         issue_type,
             //         description,
             //         priority,
             //         email,
-            //         ai_response,
             //         status,
-            //         created_at
+            //         created_at,
+            //         updated_at
             //     ) VALUES (
+            //         ${ticketId},
+            //         ${userId},
             //         ${issueType},
             //         ${description},
             //         ${priority},
             //         ${email},
-            //         ${geminiResponse},
             //         'new',
+            //         NOW(),
             //         NOW()
             //     ) RETURNING id
             // `;
@@ -927,7 +964,12 @@ const buildExecutionPath = (nodes, edges, startNodeId) => {
 const getWebhook = async (req, res) => {
   try {
     const webhookData = req.body;
-    console.log('Received webhook:', JSON.stringify(webhookData, null, 2));
+    // console.log('Received webhook:', JSON.stringify(webhookData, null, 2));
+
+    // Get user ID from Clerk authentication if available
+    let userId = "anonymous";
+    
+    
 
     // Validate webhook structure
     if (!webhookData.entry || !Array.isArray(webhookData.entry)) {
@@ -961,7 +1003,8 @@ const getWebhook = async (req, res) => {
       LEFT JOIN message_automation ma ON a.id = ma.automation_id
       WHERE a.status = TRUE
     `;
-
+    userId = automations[0].user_id;
+    console.log("userId webhook",userId);
     if (automations.length === 0) {
       return res.status(200).json({ 
         message: 'No active automations found - webhook processed' 
@@ -1003,7 +1046,11 @@ const getWebhook = async (req, res) => {
               
               if (result.shouldExecute) {
                 console.log(`Triggering message automation ${automation.id}`);
-                const executionResult = await executeAutomationFlow(automation, result.context);
+                const executionResult = await executeAutomationFlow(automation, {
+                  ...result.context,
+                  clerkUserId: userId,
+                  automationUserId: automation.user_id
+                });
                 executionResults.push({
                   automationId: automation.id,
                   result: executionResult
@@ -1039,7 +1086,11 @@ const getWebhook = async (req, res) => {
                 
                 if (result.shouldExecute) {
                   console.log(`Triggering comment automation ${automation.id}`);
-                  const executionResult = await executeAutomationFlow(automation, result.context);
+                  const executionResult = await executeAutomationFlow(automation, {
+                    ...result.context,
+                    clerkUserId: userId,
+                    automationUserId: automation.user_id
+                  });
                   executionResults.push({
                     automationId: automation.id,
                     result: executionResult
