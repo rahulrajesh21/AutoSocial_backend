@@ -14,6 +14,8 @@ const automationProcessors = {
     const commentText = changeData.value.text;
     const user_id = changeData.value.from.id;
 
+    console.log("username",username,mediaId,automation.id);
+
 
     // Check if this matches the automation's media
     const commentAutomation = await sql`
@@ -21,7 +23,9 @@ const automationProcessors = {
       WHERE automation_id = ${automation.id} 
       AND media_id = ${mediaId}
     `;
+    console.log("receiverId",commentAutomation[0].username);
     const receiverId = commentAutomation[0].username;
+   
 
     if (commentAutomation.length > 0) {
       // Don't reply to the post owner's own comments
@@ -62,8 +66,10 @@ const automationProcessors = {
 
     // Check if this automation should handle messages
     const messageAutomation = await sql`
-      SELECT * FROM message_automation 
-      WHERE automation_id = ${automation.id}
+      SELECT *
+FROM message_automation ma
+JOIN users u ON ma.username = u.id
+WHERE ma.automation_id = ${automation.id};
     `;
     const receiverId = messageAutomation[0].username;
 
@@ -501,6 +507,7 @@ Our team will review your case and respond within 24 hours.`;
 📋 Ticket Summary:
 • Issue Type: ${finalTicket.issueType}
 • Priority: ${finalTicket.priority}
+• Description: ${finalTicket.description}
 • Email: ${finalTicket.email}
 • Ticket ID: ${finalTicket.ticketId || `TKT-${Date.now().toString().slice(-6)}`}
 
@@ -1327,9 +1334,29 @@ const updateInstagramSettings = async (req, res) => {
 
     // Check if settings already exist for this user
     const existingSettings = await sql`
-      SELECT id FROM users 
+      SELECT id, username FROM users 
       WHERE id = ${userId}
     `;
+
+    let username = null;
+    
+    // If we have a token but no username, fetch it from Instagram API
+    if (instagram_access_token && (!existingSettings.length || !existingSettings[0].username)) {
+      try {
+        // Fetch user info from Instagram Graph API
+        const response = await axios.get(
+          `https://graph.instagram.com/me?fields=username&access_token=${instagram_access_token}`
+        );
+        
+        if (response.data && response.data.username) {
+          username = response.data.username;
+          console.log(`Retrieved Instagram username: ${username}`);
+        }
+      } catch (apiError) {
+        console.error('Error fetching Instagram username:', apiError);
+        // Continue with the process even if username fetch fails
+      }
+    }
 
     if (existingSettings.length > 0) {
       // Update existing settings
@@ -1338,6 +1365,7 @@ const updateInstagramSettings = async (req, res) => {
         SET 
           access_token = ${instagram_access_token},
           page_access_token = ${instagram_page_token}
+          ${username ? sql`, username = ${username}` : sql``}
         WHERE id = ${userId}
       `;
     } else {
@@ -1347,15 +1375,21 @@ const updateInstagramSettings = async (req, res) => {
           id, 
           access_token, 
           page_access_token
+          ${username ? sql`, username` : sql``}
         ) VALUES (
           ${userId}, 
           ${instagram_access_token}, 
           ${instagram_page_token}
+          ${username ? sql`, ${username}` : sql``}
         )
       `;
     }
 
-    res.status(200).json({ success: true, message: 'Instagram settings updated successfully' });
+    res.status(200).json({ 
+      success: true, 
+      message: 'Instagram settings updated successfully',
+      username: username
+    });
   } catch (error) {
     console.error('Error updating Instagram settings:', error);
     res.status(500).json({ error: 'Failed to update Instagram settings' });

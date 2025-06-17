@@ -3,8 +3,9 @@ const { getAuth } = require('@clerk/express');
 
 // Dynamic automation handlers for different trigger types
 const automationHandlers = {
-  'get-comments': async (automationId, nodeData) => {
+  'get-comments': async (automationId, nodeData, userId) => {
     const { username, mediaId } = nodeData.selectedPost || {};
+    console.log('get-comments', username, mediaId, 'userId:', userId);
     if (username && mediaId) {
       return await sql`
         INSERT INTO comment_automation (automation_id, username, media_id)
@@ -15,16 +16,17 @@ const automationHandlers = {
     return null;
   },
 
-  'receive-message': async (automationId, nodeData) => {
+  'receive-message': async (automationId, nodeData, userId) => {
     // For receive-message, we might want to store trigger conditions
+    console.log('receive-message node data:', nodeData, 'userId:', userId);
     return await sql`
-      INSERT INTO message_automation (automation_id, trigger_type, conditions)
-      VALUES (${automationId}, 'receive-message', ${JSON.stringify(nodeData)})
+      INSERT INTO message_automation (automation_id, trigger_type, conditions,username)
+      VALUES (${automationId}, 'receive-message', ${JSON.stringify(nodeData)},${userId})
       RETURNING *;
     `;
   },
 
-  'send-message': async (automationId, nodeData) => {
+  'send-message': async (automationId, nodeData, userId) => {
     // For send-message, we might want to store the message template
     return await sql`
       INSERT INTO action_automation (automation_id, action_type, action_data)
@@ -33,7 +35,7 @@ const automationHandlers = {
     `;
   },
 
-  'send-media': async (automationId, nodeData) => {
+  'send-media': async (automationId, nodeData, userId) => {
     return await sql`
       INSERT INTO action_automation (automation_id, action_type, action_data)
       VALUES (${automationId}, 'send-media', ${JSON.stringify(nodeData)})
@@ -41,7 +43,7 @@ const automationHandlers = {
     `;
   },
   
-  'helpDesk': async (automationId, nodeData) => {
+  'helpDesk': async (automationId, nodeData, userId) => {
     return await sql`
      INSERT INTO action_automation (automation_id, action_type, action_data)
       VALUES (${automationId}, 'helpDesk', ${JSON.stringify(nodeData)})
@@ -49,7 +51,7 @@ const automationHandlers = {
     `;
   },
   
-  'trigger': async (automationId, nodeData) => {
+  'trigger': async (automationId, nodeData, userId) => {
     return await sql`
       INSERT INTO action_automation (automation_id, action_type, action_data)
       VALUES (${automationId}, 'trigger', ${JSON.stringify(nodeData)})
@@ -57,7 +59,7 @@ const automationHandlers = {
     `;
   },
   
-  'text': async (automationId, nodeData) => {
+  'text': async (automationId, nodeData, userId) => {
     return await sql`
       INSERT INTO action_automation (automation_id, action_type, action_data)
       VALUES (${automationId}, 'text', ${JSON.stringify(nodeData)})
@@ -67,8 +69,9 @@ const automationHandlers = {
 };
 
 // Generic function to process automation nodes
-const processAutomationNodes = async (automationId, flowData) => {
+const processAutomationNodes = async (automationId, flowData, userId) => {
   const results = [];
+  console.log('Processing automation nodes with userId:', userId);
   
   // Find all trigger nodes (nodes that start the automation)
   const triggerNodes = flowData.nodes.filter(node => {
@@ -90,7 +93,8 @@ const processAutomationNodes = async (automationId, flowData) => {
     
     if (handler) {
       try {
-        const result = await handler(automationId, node.data);
+        // Pass userId as the third parameter to the handler
+        const result = await handler(automationId, node.data, userId);
         if (result) {
           results.push({
             nodeId: node.id,
@@ -207,7 +211,7 @@ const createAutomation = async (req, res) => {
     console.log('Flow analysis:', flowAnalysis);
 
     // 3. Process automation nodes dynamically
-    const processingResults = await processAutomationNodes(automationId, flowData);
+    const processingResults = await processAutomationNodes(automationId, flowData, userId);
     console.log('Processing results:', processingResults);
     // 4. Save metadata about the automation
     await sql`

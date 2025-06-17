@@ -2,13 +2,30 @@ const path = require('path');
 const fs = require('fs');
 const sql = require('../config/database');
 const { createInstagramPost } = require('../utils/instagramUtils');
+const { getAuth } = require('@clerk/express');
 
 const CreateScheduleAutomation = async (req, res) => {
   try {
     console.log('CreateScheduleAutomation called', req.body);
-    const { user_id, caption, scheduled_date, scheduled_time } = req.body;
-    const file = req.file;
+    const { caption, scheduled_date, scheduled_time } = req.body;
     
+    // Get user_id from Clerk authentication
+    const { userId } = req.auth;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required. User ID not found.' });
+    }
+    
+    console.log("userIdsc", userId);
+    const users = await sql`SELECT * FROM users WHERE id = ${userId}`;
+    
+    if (!users || users.length === 0) {
+      return res.status(404).json({ error: 'User not found in database' });
+    }
+    
+    const username = users[0].username;
+
+    const file = req.file;
+    console.log("user_idnew", userId);
     console.log('Scheduled Date:', scheduled_date);
     console.log('Scheduled Time:', scheduled_time);
     console.log('File Info:', file);
@@ -70,7 +87,7 @@ const CreateScheduleAutomation = async (req, res) => {
     // Add error handling for Instagram API call
     let instagramResult = null;
     try {
-      instagramResult = await createInstagramPost(fullMediaUrl, caption || "hello");
+      instagramResult = await createInstagramPost(fullMediaUrl, caption || "hello", username);
       console.log("Instagram API result:", instagramResult);
     } catch (instagramError) {
       console.error('Instagram API Error:', instagramError);
@@ -84,7 +101,7 @@ const CreateScheduleAutomation = async (req, res) => {
         user_id, caption, media_url, media_type, scheduled_date
       )
       VALUES (
-        ${user_id}, ${caption}, ${media_url}, ${media_type}, ${scheduled_datetime}
+        ${userId}, ${caption}, ${media_url}, ${media_type}, ${scheduled_datetime}
       )
       RETURNING *
     `;
@@ -92,6 +109,7 @@ const CreateScheduleAutomation = async (req, res) => {
     console.log("Database insert successful");
 
     return res.status(200).json({
+      success: true,
       message: 'Scheduled post created successfully.',
       data: result[0],
       instagram_result: instagramResult,

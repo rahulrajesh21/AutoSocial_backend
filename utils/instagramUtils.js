@@ -100,6 +100,7 @@ const getInstagramUserId = async (userId) => {
 };
 
 const createInstagramPost = async (imageUrl, caption = '', userId) => {
+  console.log("imageUrl",imageUrl,caption,userId);
   const { pageAccessToken } = await getTokensForUser(userId);
   const igUserId = await getInstagramUserId(userId);
   
@@ -397,8 +398,6 @@ const createInstagramCarousel = async (mediaItems, caption = '', userId) => {
 
 const sendMessage = async (recipientId, messageText, userId) => {
   const { accessToken } = await getTokensForUser(userId);
-  console.log('userId', userId);
-  console.log('pageAccessToken', accessToken);
   
   // Validate inputs
   if (!accessToken) {
