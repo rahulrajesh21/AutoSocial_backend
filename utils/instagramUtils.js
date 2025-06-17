@@ -4,7 +4,7 @@ const { gemini } = require("./geminiUtils");
 const { getPageId } = require("./PageUtils");
 const sql = require('../config/database');
 const instagramClient = axios;
-
+const { getAuth } = require('@clerk/express');  
 // Function to get tokens from the database for a user
 const getTokensForUser = async (userId) => {
   try {
@@ -15,12 +15,12 @@ const getTokensForUser = async (userId) => {
         pageAccessToken: process.env.INSTAGRAM_PAGE || process.env.INSTAGRAM_TOKEN
       };
     }
-    
+    console.log("userId", userId);
     // Get tokens from database
     const settings = await sql`
       SELECT access_token, page_access_token 
       FROM users 
-      WHERE username = ${userId}
+      WHERE username = ${userId} or id = ${userId}
     `;
     
     if (settings.length === 0 || (!settings[0].access_token && !settings[0].page_access_token)) {
@@ -534,8 +534,10 @@ const sendMedia = async (recipientId, mediaUrl, userId) => {
 };
 
 const getAllInstagramPosts = async (req, res) => {
-    const userId = req.user?.id;
+    const getUser = await getAuth(req);
+    const userId = getUser.userId;
     const { accessToken } = await getTokensForUser(userId);
+    console.log("accessToken", accessToken,userId);
     
     try {
         const response = await instagramClient.get(

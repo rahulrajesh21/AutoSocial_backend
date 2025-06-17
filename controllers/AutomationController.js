@@ -40,12 +40,29 @@ const automationHandlers = {
       RETURNING *;
     `;
   },
-  'helpDesk': async (automationId,nodeData) =>{
+  
+  'helpDesk': async (automationId, nodeData) => {
     return await sql`
      INSERT INTO action_automation (automation_id, action_type, action_data)
       VALUES (${automationId}, 'helpDesk', ${JSON.stringify(nodeData)})
       RETURNING *;
-    `
+    `;
+  },
+  
+  'trigger': async (automationId, nodeData) => {
+    return await sql`
+      INSERT INTO action_automation (automation_id, action_type, action_data)
+      VALUES (${automationId}, 'trigger', ${JSON.stringify(nodeData)})
+      RETURNING *;
+    `;
+  },
+  
+  'text': async (automationId, nodeData) => {
+    return await sql`
+      INSERT INTO action_automation (automation_id, action_type, action_data)
+      VALUES (${automationId}, 'text', ${JSON.stringify(nodeData)})
+      RETURNING *;
+    `;
   }
 };
 
@@ -56,14 +73,19 @@ const processAutomationNodes = async (automationId, flowData) => {
   // Find all trigger nodes (nodes that start the automation)
   const triggerNodes = flowData.nodes.filter(node => {
     const selectedOption = node.data?.selectedOption;
-    // Check for nodes with selectedOption or type 'helpDesk'
+    // Check for nodes with selectedOption, type 'helpDesk' or type 'trigger'
     return (selectedOption && automationHandlers[selectedOption]) || 
-           (node.type === 'helpDesk' && automationHandlers['helpDesk']);
+           (node.type === 'helpDesk' && automationHandlers['helpDesk']) ||
+           (node.type === 'trigger' && automationHandlers['trigger']);
   });
 
   // Process each trigger node
   for (const node of triggerNodes) {
-    const handlerKey = node.data?.selectedOption || (node.type === 'helpDesk' ? 'helpDesk' : null);
+    // Handle different types of nodes
+    const handlerKey = node.data?.selectedOption || 
+                       (node.type === 'helpDesk' ? 'helpDesk' : null) ||
+                       (node.type === 'trigger' ? 'trigger' : null);
+                       
     const handler = handlerKey ? automationHandlers[handlerKey] : null;
     
     if (handler) {
@@ -124,12 +146,24 @@ const analyzeFlowStructure = (flowData) => {
         type: 'gemini',
         data: data
       });
-    }else if (type === 'helpDesk'){
+    } else if (type === 'helpDesk') {
       analysis.processors.push({
         id: node.id,
         type: "helpDesk",
         data: data
-      })
+      });
+    } else if (type === 'trigger') {
+      analysis.triggers.push({
+        id: node.id,
+        type: 'trigger',
+        data: data
+      });
+    } else if (type === 'text') {
+      analysis.processors.push({
+        id: node.id,
+        type: 'text',
+        data: data
+      });
     }
   });
 

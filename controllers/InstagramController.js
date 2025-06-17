@@ -86,6 +86,47 @@ const automationProcessors = {
     }
     
     return { shouldExecute: false };
+  },
+  
+  'trigger': async (messagingData, automation) => {
+    // Skip non-message events
+    if (!messagingData.message || !messagingData.message.text) {
+      return { shouldExecute: false };
+    }
+    
+    const senderId = messagingData.sender.id || messagingData.value.from.id;
+    const recipientId = messagingData.recipient.id;
+    const messageText = messagingData.message.text || messagingData.value.text;
+    const messageId = messagingData.message.mid ||  messagingData.value.id;
+    const timestamp = messagingData.timestamp;
+    
+    console.log('Processing potential trigger message:', { senderId, messageText });
+    
+    // Find relevant trigger nodes for this automation
+    const triggerAutomation = await sql`
+      SELECT * FROM action_automation 
+      WHERE automation_id = ${automation.id} 
+      AND action_type = 'trigger'
+    `;
+    
+    if (triggerAutomation.length > 0) {
+      // For simplicity, we're returning the context regardless of the trigger word
+      // The actual trigger word checking will be done in the node executor
+      return {
+        shouldExecute: true,
+        context: {
+          senderId,
+          recipientId,
+          messageText,
+          messageId,
+          timestamp,
+          automationUserId: automation.user_id,
+          triggerType: 'message'
+        }
+      };
+    }
+    
+    return { shouldExecute: false };
   }
 };
 
@@ -548,7 +589,59 @@ Our technical team will review your case and contact you within 24 hours with tr
   };
 },
 
+'text': async (node, context, previousOutput) => {
+  console.log("=======================Text Node=======================");
+  const staticText = node.data?.text || '';
+  
+  return {
+    success: true,
+    output: staticText,
+    data: {
+      aiResponse: staticText,
+      message: staticText,
+      conversationId: context.senderId || context.user_id || context.username || 'unknown',
+      senderId: context.senderId,
+      user_id: context.user_id,
+      username: context.username,
+      receiverId: context.receiverId
+    }
+  };
+},
 
+'trigger': async (node, context, previousOutput) => {
+  console.log("=======================Trigger Node=======================");
+  const triggerWord = node.data?.triggerWord || '';
+  const caseSensitive = node.data?.caseSensitive || false;
+  const userInput = (context.messageText || context.commentText || '').trim();
+  
+  let isTriggered = false;
+  
+  if (triggerWord && userInput) {
+    if (caseSensitive) {
+      isTriggered = userInput.includes(triggerWord);
+    } else {
+      isTriggered = userInput.toLowerCase().includes(triggerWord.toLowerCase());
+    }
+  }
+  
+  console.log(`Trigger word: "${triggerWord}", Case sensitive: ${caseSensitive}`);
+  console.log(`User input: "${userInput}", Triggered: ${isTriggered}`);
+  
+  return {
+    success: isTriggered,
+    output: isTriggered ? `Triggered by word: ${triggerWord}` : `Not triggered (looking for: ${triggerWord})`,
+    data: {
+      isTriggered,
+      triggerWord,
+      userInput,
+      conversationId: context.senderId || context.user_id || context.username || 'unknown',
+      senderId: context.senderId,
+      user_id: context.user_id,
+      username: context.username,
+      receiverId: context.receiverId
+    }
+  };
+},
 
   'instgram': async (node, context, previousOutput) => {
     const { selectedOption } = node.data;
@@ -839,10 +932,10 @@ const executeAutomationFlow = async (automation, context) => {
   // Find the starting node (trigger node)
   const triggerNodes = nodes.filter(node => {
     const selectedOption = node.data?.selectedOption;
-    return selectedOption && (
+    return (selectedOption && (
       selectedOption.includes('get-') || 
       selectedOption.includes('receive-')
-    );
+    )) || node.type === 'trigger';
   });
 
   if (triggerNodes.length === 0) {
@@ -875,6 +968,12 @@ const executeAutomationFlow = async (automation, context) => {
           nodeType: node.type,
           result
         });
+
+        // If this is a trigger node and it returns false, stop execution
+        if (node.type === 'trigger' && !result.success) {
+          console.log(`Trigger condition not met for node ${node.id}. Stopping execution.`);
+          break; // Stop executing further nodes
+        }
 
         previousOutput = result;
         console.log(`Node ${node.id} executed:`, result);
@@ -1040,12 +1139,33 @@ const getWebhook = async (req, res) => {
         // Check each automation for message triggers
         for (const automation of automations) {
           try {
-            const processor = automationProcessors['receive-message'];
-            if (processor) {
-              const result = await processor(messagingEvent, automation);
+            // Check standard message processors
+            const messageProcessor = automationProcessors['receive-message'];
+            if (messageProcessor) {
+              const result = await messageProcessor(messagingEvent, automation);
               
               if (result.shouldExecute) {
                 console.log(`Triggering message automation ${automation.id}`);
+                const executionResult = await executeAutomationFlow(automation, {
+                  ...result.context,
+                  clerkUserId: userId,
+                  automationUserId: automation.user_id
+                });
+                executionResults.push({
+                  automationId: automation.id,
+                  result: executionResult
+                });
+                executedCount++;
+              }
+            }
+            
+            // Check for trigger word processors
+            const triggerProcessor = automationProcessors['trigger'];
+            if (triggerProcessor) {
+              const result = await triggerProcessor(messagingEvent, automation);
+              
+              if (result.shouldExecute) {
+                console.log(`Checking trigger word automation ${automation.id}`);
                 const executionResult = await executeAutomationFlow(automation, {
                   ...result.context,
                   clerkUserId: userId,
